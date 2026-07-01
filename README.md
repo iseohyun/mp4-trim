@@ -1,4 +1,4 @@
-![[MP4-Trim image.png]]
+![MP4-Trim image](MP4-Trim%20image.png)
 
 ## 목적
 - 영상 편집시 용량이 크면 Timeline 랜더링에서 시간적 손해가 큼
