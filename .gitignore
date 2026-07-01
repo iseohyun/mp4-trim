@@ -1,0 +1,6 @@
+/build
+/dist/mp4-trim.exe
+/dist/task_history.json
+/dist/trim_history.json
+mp4-trim.spec
+ffmpeg.exe
