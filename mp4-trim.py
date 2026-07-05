@@ -356,6 +356,7 @@ class VideoCutterApp(QWidget):
         self.task_histories = []
         self.create_history_flag = True
         self.is_loading_history = False
+        self.last_enter_name = ""
         self.original_duration_cs = 35999999
         self.original_creation_dt = None
         # 기본 경로 설정 (시스템 비디오 폴더 -> 없을 시 홈 폴더)
@@ -422,6 +423,8 @@ class VideoCutterApp(QWidget):
         layout.addWidget(QLabel("저장 파일명"), 4, 0)
         self.nameInput = QLineEdit("output.mp4")
         self.nameInput.textChanged.connect(self.update_output_play_btn_state)
+        self.nameInput.returnPressed.connect(self.on_name_input_enter)
+        self.nameInput.textChanged.connect(self.update_name_input_style)
         layout.addWidget(self.nameInput, 4, 1)
 
         self.playOutBtn = QPushButton("재생")
@@ -917,6 +920,37 @@ class VideoCutterApp(QWidget):
     def on_input_modified(self):
         if not self.is_loading_history:
             self.create_history_flag = True
+
+    def on_name_input_enter(self):
+        current_name = self.nameInput.text()
+        if not current_name:
+            return
+            
+        if self.last_enter_name and current_name == self.last_enter_name:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("확인")
+            msg_box.setText("무손실컷팅실행을 수행할까요?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+            msg_box.button(QMessageBox.StandardButton.Ok).setText("확인")
+            msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")
+            msg_box.button(QMessageBox.StandardButton.Ok).setFocus()
+            
+            result = msg_box.exec()
+            if result == QMessageBox.StandardButton.Ok:
+                self.executeCutter()
+            else:
+                self.nameInput.setFocus()
+        else:
+            self.last_enter_name = current_name
+            self.update_name_input_style()
+
+    def update_name_input_style(self):
+        current_name = self.nameInput.text()
+        if self.last_enter_name and current_name == self.last_enter_name:
+            self.nameInput.setStyleSheet("border: 1px solid red;")
+        else:
+            self.nameInput.setStyleSheet("")
 
 
 if __name__ == "__main__":
