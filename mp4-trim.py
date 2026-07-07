@@ -356,6 +356,7 @@ class VideoCutterApp(QWidget):
         self.task_histories = []
         self.create_history_flag = True
         self.is_loading_history = False
+        self.is_loading_file = False
         self.last_enter_name = ""
         self.original_duration_cs = 35999999
         self.original_creation_dt = None
@@ -536,53 +537,57 @@ class VideoCutterApp(QWidget):
             self.fileInput.setText(file)
 
     def on_file_changed(self, text):
-        self.update_output_dir()
-        is_exist = os.path.isfile(text)
-        self.playSrcBtn.setEnabled(is_exist)
-        self.propertiesBtn.setEnabled(is_exist)
-        self.openSrcDirBtn.setEnabled(is_exist)
-        
-        if is_exist:
-            self.save_history(os.path.dirname(text))
-            try:
-                duration_cs, creation_dt = get_media_creation_time_and_duration(text)
-                self.original_duration_cs = duration_cs
-                self.original_creation_dt = creation_dt
-                
-                # Update inputs max limits
-                self.startInput.max_val_cs = duration_cs
-                self.endInput.max_val_cs = duration_cs
-                
-                # Get current start and end times
-                start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
-                end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
-                
-                # Check bounds
-                if start_cs > duration_cs:
-                    start_cs = duration_cs
-                if end_cs > duration_cs or end_cs == 0:
-                    end_cs = duration_cs
-                
-                self.startInput.setText(self.startInput.centiseconds_to_time(start_cs))
-                self.endInput.setText(self.endInput.centiseconds_to_time(end_cs))
-            except Exception as e:
-                import traceback
-                error_msg = traceback.format_exc()
-                print("Error parsing media:", error_msg)
-                QMessageBox.warning(
-                    self,
-                    "미디어 정보 분석 실패",
-                    f"동영상 정보(재생 시간)를 가져오지 못했습니다.\n기본 제한 시간(99:59:59.99)이 적용됩니다.\n\n상세 에러:\n{str(e)}"
-                )
+        self.is_loading_file = True
+        try:
+            self.update_output_dir()
+            is_exist = os.path.isfile(text)
+            self.playSrcBtn.setEnabled(is_exist)
+            self.propertiesBtn.setEnabled(is_exist)
+            self.openSrcDirBtn.setEnabled(is_exist)
+            
+            if is_exist:
+                self.save_history(os.path.dirname(text))
+                try:
+                    duration_cs, creation_dt = get_media_creation_time_and_duration(text)
+                    self.original_duration_cs = duration_cs
+                    self.original_creation_dt = creation_dt
+                    
+                    # Update inputs max limits
+                    self.startInput.max_val_cs = duration_cs
+                    self.endInput.max_val_cs = duration_cs
+                    
+                    # Get current start and end times
+                    start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
+                    end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
+                    
+                    # Check bounds
+                    if start_cs > duration_cs:
+                        start_cs = duration_cs
+                    if end_cs > duration_cs or end_cs == 0:
+                        end_cs = duration_cs
+                    
+                    self.startInput.setText(self.startInput.centiseconds_to_time(start_cs))
+                    self.endInput.setText(self.endInput.centiseconds_to_time(end_cs))
+                except Exception as e:
+                    import traceback
+                    error_msg = traceback.format_exc()
+                    print("Error parsing media:", error_msg)
+                    QMessageBox.warning(
+                        self,
+                        "미디어 정보 분석 실패",
+                        f"동영상 정보(재생 시간)를 가져오지 못했습니다.\n기본 제한 시간(99:59:59.99)이 적용됩니다.\n\n상세 에러:\n{str(e)}"
+                    )
+                    self.original_duration_cs = 35999999
+                    self.original_creation_dt = None
+                    self.startInput.max_val_cs = 35999999
+                    self.endInput.max_val_cs = 35999999
+            else:
                 self.original_duration_cs = 35999999
                 self.original_creation_dt = None
                 self.startInput.max_val_cs = 35999999
                 self.endInput.max_val_cs = 35999999
-        else:
-            self.original_duration_cs = 35999999
-            self.original_creation_dt = None
-            self.startInput.max_val_cs = 35999999
-            self.endInput.max_val_cs = 35999999
+        finally:
+            self.is_loading_file = False
 
     def openDirDialog(self):
         start_dir = self.get_active_working_dir()
@@ -682,6 +687,8 @@ class VideoCutterApp(QWidget):
         self.update_output_play_btn_state()
 
     def on_history_combo_changed(self, index):
+        if self.is_loading_file:
+            return
         if self.radioCustom.isChecked() and index >= 0:
             self.dirInput.setText(self.historyCombo.currentText().replace('\\', '/'))
 
