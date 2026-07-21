@@ -7,6 +7,7 @@ import ctypes
 import re
 import tempfile
 import logging
+import traceback
 from datetime import datetime, timedelta
 
 if getattr(sys, 'frozen', False):
@@ -22,7 +23,27 @@ logging.basicConfig(
     encoding="utf-8"
 )
 logging.info("=== MP4-Trim App Loaded ===")
-from PyQt6.QtGui import QKeyEvent, QIcon, QPainter, QPixmap, QAction
+
+def custom_excepthook(exc_type, exc_value, exc_traceback):
+    err_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    logging.critical(f"Uncaught Exception:\n{err_str}")
+    try:
+        with open(os.path.join(APP_DIR, "crash_fatal.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now()}]\n{err_str}\n\n")
+    except Exception:
+        pass
+    app = QApplication.instance()
+    if app:
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle("프로그램 오류 발생")
+        msg.setText(f"프로그램 실행 중 오류가 발생했습니다:\n\n{exc_value}")
+        msg.setDetailedText(err_str)
+        msg.exec()
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+sys.excepthook = custom_excepthook
+from PyQt6.QtGui import QKeyEvent, QIcon, QPainter, QPixmap, QAction, QColor, QPen, QBrush
 from PyQt6.QtCore import Qt, QStandardPaths, pyqtSignal, QEvent, QTimer, QUrl, QThread, QRectF
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -47,6 +68,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QStyle,
 )
 
 
@@ -348,6 +370,15 @@ def get_ffplay_path() -> str:
     return "ffplay.exe"
 
 
+def ms_to_time_str(ms: int) -> str:
+    total_sec = ms // 1000
+    cs = (ms % 1000) // 10
+    hh = total_sec // 3600
+    mm = (total_sec % 3600) // 60
+    ss = total_sec % 60
+    return f"{hh:02d}:{mm:02d}:{ss:02d}.{cs:02d}"
+
+
 def get_media_creation_time_and_duration(video_path: str):
     ffmpeg_bin = get_ffmpeg_path()
     
@@ -494,17 +525,210 @@ class ThumbnailGeneratorThread(QThread):
             logging.error(f"[ThumbThread] Exception: {e}", exc_info=True)
 
 
-class StackedSeekWidget(QWidget):
-    """필름스트립 썸네일과 슬라이더를 세련되게 중첩 배치하는 컨테이너 위젯"""
+class JumpSlider(QSlider):
+    """클릭한 위치로 타임스탬프가 즉시 이동하는 슬라이더"""
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            val = QStyle.sliderValueFromPosition(
+                self.minimum(), self.maximum(), int(event.position().x()), self.width()
+            )
+            self.setValue(val)
+            self.sliderMoved.emit(val)
+        super().mousePressEvent(event)
+
+
+class TrimmingSliderWidget(QWidget):
+    """
+    100% 비디오 플레이어 너비에 맞춰 표시되는 필름스트립 타임라인 바.
+    - 10개 대표 씬 썸네일 타일링
+    - 선택 구간 [Start, End] 밝게 표시 / 구간 밖은 반투명 어둡게 표시
+    - 시작 마커 (초록 깃발 [), 종료 마커 (주황 깃발 ])
+    - 현재 재생 헤드 (빨간선 + 핸들)
+    - 마커 클릭 선택 후 좌우 화살표키(← / →) 미세 조작 지원
+    - 마우스 드래그로 시작점/종료점/재생 헤드 자유 이동
+    """
+    position_changed = pyqtSignal(int)   # ms
+    start_changed = pyqtSignal(int)      # ms
+    end_changed = pyqtSignal(int)        # ms
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(34)
+        self.setFixedHeight(38)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+
         self.filmstrip_widget = FilmstripWidget(self)
-        self.seek_slider = QSlider(Qt.Orientation.Horizontal, self)
+
+        self.duration_ms = 1000
+        self.position_ms = 0
+        self.start_ms = 0
+        self.end_ms = 1000
+
+        self.active_marker = None     # 'start', 'end', 'playhead'
+        self.dragging_marker = None
+
+    def set_duration(self, dur_ms: int):
+        if dur_ms > 0:
+            old_dur = self.duration_ms
+            self.duration_ms = dur_ms
+            if self.end_ms == old_dur or self.end_ms > dur_ms or self.end_ms == 0:
+                self.end_ms = dur_ms
+            self.update()
+
+    def set_position(self, pos_ms: int):
+        self.position_ms = max(0, min(self.duration_ms, pos_ms))
+        self.update()
+
+    def set_start_ms(self, start_ms: int):
+        val = max(0, min(self.end_ms, start_ms))
+        if self.start_ms != val:
+            self.start_ms = val
+            self.update()
+
+    def set_end_ms(self, end_ms: int):
+        val = max(self.start_ms, min(self.duration_ms, end_ms))
+        if self.end_ms != val:
+            self.end_ms = val
+            self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.filmstrip_widget.setGeometry(0, 0, self.width(), self.height())
+
+    def ms_to_x(self, ms: int) -> float:
+        if self.duration_ms <= 0:
+            return 0.0
+        return (ms / float(self.duration_ms)) * float(self.width())
+
+    def x_to_ms(self, x: float) -> int:
+        if self.width() <= 0:
+            return 0
+        ratio = max(0.0, min(1.0, x / float(self.width())))
+        return int(ratio * self.duration_ms)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        w = float(self.width())
+        h = float(self.height())
+        if w <= 0 or h <= 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        sx = self.ms_to_x(self.start_ms)
+        ex = self.ms_to_x(self.end_ms)
+        px = self.ms_to_x(self.position_ms)
+
+        # 1. 선택 영역 밖 (0 ~ start_ms, end_ms ~ duration_ms) 반투명 블랙 딤(Dim) 처리
+        dim_color = QColor(0, 0, 0, 160)
+        if sx > 0:
+            painter.fillRect(QRectF(0, 0, sx, h), dim_color)
+        if ex < w:
+            painter.fillRect(QRectF(ex, 0, w - ex, h), dim_color)
+
+        # 2. 선택된 유효 구간 [start_ms, end_ms] 테두리 강조
+        border_pen = QPen(QColor(0, 120, 215, 220), 2)
+        painter.setPen(border_pen)
+        painter.drawRect(QRectF(sx, 1, max(1.0, ex - sx), h - 2))
+
+        # 3. 시작 마커 (초록/파란색 깃발/라인)
+        start_color = QColor(0, 200, 83) if self.active_marker == 'start' else QColor(40, 167, 69)
+        painter.setPen(QPen(start_color, 3))
+        painter.drawLine(int(sx), 0, int(sx), int(h))
+
+        start_box = QRectF(sx - 9, 0, 18, 14)
+        painter.fillRect(start_box, start_color)
+        painter.setPen(QColor(255, 255, 255))
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(start_box, Qt.AlignmentFlag.AlignCenter, "[")
+
+        # 4. 종료 마커 (주황/빨간색 깃발/라인)
+        end_color = QColor(255, 145, 0) if self.active_marker == 'end' else QColor(220, 53, 69)
+        painter.setPen(QPen(end_color, 3))
+        painter.drawLine(int(ex), 0, int(ex), int(h))
+
+        end_box = QRectF(ex - 9, 0, 18, 14)
+        painter.fillRect(end_box, end_color)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(end_box, Qt.AlignmentFlag.AlignCenter, "]")
+
+        # 5. 현재 재생 헤드 (빨간선)
+        painter.setPen(QPen(QColor(255, 59, 48), 2))
+        painter.drawLine(int(px), 0, int(px), int(h))
+        head_box = QRectF(px - 5, h - 12, 10, 12)
+        painter.fillRect(head_box, QColor(255, 59, 48))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            x = event.position().x()
+            sx = self.ms_to_x(self.start_ms)
+            ex = self.ms_to_x(self.end_ms)
+            px = self.ms_to_x(self.position_ms)
+
+            if abs(x - sx) <= 12:
+                self.active_marker = 'start'
+                self.dragging_marker = 'start'
+            elif abs(x - ex) <= 12:
+                self.active_marker = 'end'
+                self.dragging_marker = 'end'
+            elif abs(x - px) <= 10:
+                self.active_marker = 'playhead'
+                self.dragging_marker = 'playhead'
+            else:
+                self.active_marker = 'playhead'
+                self.dragging_marker = 'playhead'
+                new_ms = self.x_to_ms(x)
+                self.position_ms = new_ms
+                self.position_changed.emit(new_ms)
+            self.setFocus()
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.dragging_marker:
+            x = event.position().x()
+            new_ms = self.x_to_ms(x)
+            if self.dragging_marker == 'start':
+                self.start_ms = max(0, min(self.end_ms, new_ms))
+                self.start_changed.emit(self.start_ms)
+            elif self.dragging_marker == 'end':
+                self.end_ms = max(self.start_ms, min(self.duration_ms, new_ms))
+                self.end_changed.emit(self.end_ms)
+            elif self.dragging_marker == 'playhead':
+                self.position_ms = new_ms
+                self.position_changed.emit(self.position_ms)
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        self.dragging_marker = None
+        self.update()
+
+    def keyPressEvent(self, event):
+        step_ms = 1000  # 1초 기본 이동
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            step_ms = 5000  # Shift: 5초
+        elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            step_ms = 100   # Ctrl: 0.1초
+
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            delta = step_ms if event.key() == Qt.Key.Key_Right else -step_ms
+            if self.active_marker == 'start':
+                self.start_ms = max(0, min(self.end_ms, self.start_ms + delta))
+                self.start_changed.emit(self.start_ms)
+            elif self.active_marker == 'end':
+                self.end_ms = max(self.start_ms, min(self.duration_ms, self.end_ms + delta))
+                self.end_changed.emit(self.end_ms)
+            else:
+                self.position_ms = max(0, min(self.duration_ms, self.position_ms + delta))
+                self.position_changed.emit(self.position_ms)
+            self.update()
+        else:
+            super().keyPressEvent(event)
+
 class EmbeddedVideoPlayer(QWidget):
-    """내장 미디어 플레이어 위젯 (상단 비디오, 하단 항상 노출 썸네일 타임라인 바, 호버 오버레이 컨트롤)"""
-    set_start_requested = pyqtSignal(str)
-    set_end_requested = pyqtSignal(str)
+    """내장 미디어 플레이어 위젯 (상단 비디오, 하단 100% 타임라인 바, 호버 오버레이 컨트롤)"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -526,12 +750,11 @@ class EmbeddedVideoPlayer(QWidget):
         self.media_player.setVideoOutput(self.video_widget)
         main_layout.addWidget(self.video_widget, 1)
 
-        # 2. 하단 항상 노출 필름스트립 타임라인 바
-        self.stacked_seek = StackedSeekWidget(self)
-        self.filmstrip_widget = self.stacked_seek.filmstrip_widget
-        self.seek_slider = self.stacked_seek.seek_slider
-        self.seek_slider.sliderMoved.connect(self.set_position)
-        main_layout.addWidget(self.stacked_seek, 0)
+        # 2. 하단 100% 필름스트립 타임라인 슬라이더
+        self.trimming_slider = TrimmingSliderWidget(self)
+        self.filmstrip_widget = self.trimming_slider.filmstrip_widget
+        self.trimming_slider.position_changed.connect(self.media_player.setPosition)
+        main_layout.addWidget(self.trimming_slider, 0)
 
         # 3. 비디오 화면 위 마우스 호버 오버레이 패널
         self.overlay = QFrame(self.video_widget)
@@ -557,20 +780,12 @@ class EmbeddedVideoPlayer(QWidget):
         btn_box.addStretch()
         ov_layout.addLayout(btn_box)
 
-        # 하단 컨트롤 바 (시간표시, 지점 설정 버튼, 전체화면)
+        # 하단 컨트롤 바 (시간표시, 전체화면)
         bottom_box = QHBoxLayout()
         bottom_box.setSpacing(8)
 
         self.time_label = QLabel("00:00:00.00 / 00:00:00.00")
         self.time_label.setStyleSheet("color: white; font-weight: bold; font-family: Consolas, monospace; font-size: 13px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;")
-
-        self.set_start_btn = QPushButton("시작지점으로")
-        self.set_start_btn.setStyleSheet("QPushButton { color: white; background-color: #0078d7; padding: 4px 8px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #106ebe; }")
-        self.set_start_btn.clicked.connect(self.on_set_start)
-
-        self.set_end_btn = QPushButton("종료지점으로")
-        self.set_end_btn.setStyleSheet("QPushButton { color: white; background-color: #0078d7; padding: 4px 8px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #106ebe; }")
-        self.set_end_btn.clicked.connect(self.on_set_end)
 
         self.fullscreen_btn = QPushButton("⛶")
         self.fullscreen_btn.setStyleSheet("QPushButton { color: white; background-color: #444; padding: 4px 8px; border-radius: 4px; font-size: 14px; } QPushButton:hover { background-color: #666; }")
@@ -578,8 +793,6 @@ class EmbeddedVideoPlayer(QWidget):
 
         bottom_box.addWidget(self.time_label)
         bottom_box.addStretch()
-        bottom_box.addWidget(self.set_start_btn)
-        bottom_box.addWidget(self.set_end_btn)
         bottom_box.addWidget(self.fullscreen_btn)
 
         ov_layout.addLayout(bottom_box)
@@ -588,6 +801,8 @@ class EmbeddedVideoPlayer(QWidget):
         self.media_player.positionChanged.connect(self.on_position_changed)
         self.media_player.durationChanged.connect(self.on_duration_changed)
         self.media_player.playbackStateChanged.connect(self.on_playback_state_changed)
+        if hasattr(self.video_widget, 'videoSink') and self.video_widget.videoSink():
+            self.video_widget.videoSink().videoSizeChanged.connect(self.update_video_aspect)
 
         # 오버레이 자동 숨김 타이머
         self.hide_timer = QTimer(self)
@@ -596,6 +811,9 @@ class EmbeddedVideoPlayer(QWidget):
         self.hide_timer.timeout.connect(self.hide_overlay)
 
         self.drag_start_pos = None
+
+    def update_video_aspect(self):
+        pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -671,13 +889,12 @@ class EmbeddedVideoPlayer(QWidget):
         self.media_player.setPosition(position)
 
     def on_position_changed(self, position_ms):
-        if not self.seek_slider.isSliderDown():
-            self.seek_slider.setValue(position_ms)
+        self.trimming_slider.set_position(position_ms)
         dur_ms = self.media_player.duration()
         self.time_label.setText(f"{self.ms_to_time_str(position_ms)} / {self.ms_to_time_str(dur_ms)}")
 
     def on_duration_changed(self, duration_ms):
-        self.seek_slider.setRange(0, duration_ms)
+        self.trimming_slider.set_duration(duration_ms)
         pos_ms = self.media_player.position()
         self.time_label.setText(f"{self.ms_to_time_str(pos_ms)} / {self.ms_to_time_str(duration_ms)}")
 
@@ -709,8 +926,8 @@ class EmbeddedVideoPlayer(QWidget):
 class VideoCutterApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.history_file = "trim_history.json"
-        self.task_history_file = "task_history.json"
+        self.history_file = os.path.join(APP_DIR, "trim_history.json")
+        self.task_history_file = os.path.join(APP_DIR, "task_history.json")
         self.task_histories = []
         self.create_history_flag = True
         self.is_loading_history = False
@@ -741,7 +958,7 @@ class VideoCutterApp(QWidget):
 
     def initUI(self):
         self.setWindowIcon(QIcon("dist/icon.ico"))
-        self.setWindowTitle("초고속 무손실 영상 분할기 v1.0.3")
+        self.setWindowTitle("초고속 무손실 영상 분할기 v1.0.4")
         self.setAcceptDrops(True)
 
         # 화면 1/4 크기로 기본 배치
@@ -761,134 +978,122 @@ class VideoCutterApp(QWidget):
         root_layout.setContentsMargins(10, 10, 10, 10)
         root_layout.setSpacing(10)
 
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
+        # 1. 좌측 옵션 사이드바 패널
+        self.option_sidebar = QFrame()
+        self.option_sidebar.setFixedWidth(270)
+        self.option_sidebar.setStyleSheet("""
+            QFrame { background-color: #252526; border-radius: 6px; }
+            QLabel { color: white; font-weight: bold; }
+            QLineEdit { background-color: #1e1e1e; color: white; border: 1px solid #333; border-radius: 4px; padding: 4px; }
+            QComboBox { background-color: #1e1e1e; color: white; border: 1px solid #333; border-radius: 4px; padding: 4px; }
+            QCheckBox, QRadioButton { color: #dcdcdc; }
+            QPushButton { background-color: #3e3e42; color: white; border-radius: 4px; padding: 4px 8px; }
+            QPushButton:hover { background-color: #0078d7; }
+        """)
 
-        # 0. 내장 플레이어 위젯
-        self.player_widget = EmbeddedVideoPlayer(self)
-        left_layout.addWidget(self.player_widget, 1)
+        opt_layout = QVBoxLayout(self.option_sidebar)
+        opt_layout.setContentsMargins(10, 10, 10, 10)
+        opt_layout.setSpacing(8)
 
-        layout = QGridLayout()
-        layout.setVerticalSpacing(10)
+        opt_title = QLabel("옵션 & 설정 (단축키: [)")
+        opt_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d89ef;")
+        opt_layout.addWidget(opt_title)
 
-        # 호환성용 파일 정보 입력 필드 (UI상에는 숨김)
-        self.fileInput = QLineEdit()
-        self.fileInput.textChanged.connect(self.on_file_changed)
-
-        # 2. 시간 설정 영역 (커스텀 ArrowKey 라인 에디트) (행 2, 3)
-        layout.addWidget(QLabel("시작"), 2, 0)
-        self.startInput = ArrowKeyLineEdit("00:00:00.00")
-        layout.addWidget(self.startInput, 2, 1)
-
-        start_btn_layout = QHBoxLayout()
-        for label, delta in [("-5초", -5), ("-1초", -1), ("+1초", 1), ("+5초", 5)]:
-            btn = QPushButton(label)
-            btn.setFixedWidth(45)
-            btn.clicked.connect(lambda _, d=delta: self.adjust_time_input(self.startInput, d))
-            start_btn_layout.addWidget(btn)
-        layout.addLayout(start_btn_layout, 2, 2)
-
-        layout.addWidget(QLabel("종료"), 3, 0)
-        self.endInput = ArrowKeyLineEdit("00:00:00.00")
-        self.endInput.focused.connect(self.check_end_time_focus)
-        layout.addWidget(self.endInput, 3, 1)
-        self.startInput.next_line_edit = self.endInput
-        self.endInput.prev_line_edit = self.startInput
-
-        end_btn_layout = QHBoxLayout()
-        for label, delta in [("-5초", -5), ("-1초", -1), ("+1초", 1), ("+5초", 5)]:
-            btn = QPushButton(label)
-            btn.setFixedWidth(45)
-            btn.clicked.connect(lambda _, d=delta: self.adjust_time_input(self.endInput, d))
-            end_btn_layout.addWidget(btn)
-        layout.addLayout(end_btn_layout, 3, 2)
-
-        # 내장 플레이어 지점 설정 시그널 연결
-        self.player_widget.set_start_requested.connect(self.startInput.setText)
-        self.player_widget.set_end_requested.connect(self.endInput.setText)
-
-        # 3. 저장 파일명 설정 영역 (행 4)
-        layout.addWidget(QLabel("저장 파일명"), 4, 0)
+        # 1-1. 저장 파일명
+        name_box = QHBoxLayout()
         self.nameInput = QLineEdit("output.mp4")
         self.nameInput.textChanged.connect(self.update_output_play_btn_state)
         self.nameInput.returnPressed.connect(self.on_name_input_enter)
         self.nameInput.textChanged.connect(self.update_name_input_style)
-        layout.addWidget(self.nameInput, 4, 1)
-
         self.playOutBtn = QPushButton("재생")
         self.playOutBtn.setToolTip("편집영상 재생하기")
         self.playOutBtn.setEnabled(False)
         self.playOutBtn.clicked.connect(self.play_output_video)
-        layout.addWidget(self.playOutBtn, 4, 2)
+        name_box.addWidget(self.nameInput, 1)
+        name_box.addWidget(self.playOutBtn, 0)
 
-        # 3-1. 옵션 영역 (행 5)
-        layout.addWidget(QLabel("옵션"), 5, 0)
-        options_layout = QHBoxLayout()
+        opt_layout.addWidget(QLabel("저장 파일명"))
+        opt_layout.addLayout(name_box)
+
+        # 1-2. 저장 옵션
         self.muteCheck = QCheckBox("음소거 (영상만 가져오기)")
         self.copyMetaCheck = QCheckBox("속성 복사")
         self.copyMetaCheck.setChecked(True)
         self.autoNumberCheck = QCheckBox("자동 넘버링")
         self.autoNumberCheck.setChecked(True)
-        options_layout.addWidget(self.muteCheck)
-        options_layout.addWidget(self.copyMetaCheck)
-        options_layout.addWidget(self.autoNumberCheck)
-        layout.addLayout(options_layout, 5, 1, 1, 2)
+        opt_layout.addWidget(self.muteCheck)
+        opt_layout.addWidget(self.copyMetaCheck)
+        opt_layout.addWidget(self.autoNumberCheck)
 
-        # 4. 저장 위치 라디오 그룹 (행 6)
-        layout.addWidget(QLabel("저장 위치"), 6, 0)
-        radio_layout = QHBoxLayout()
+        # 1-3. 저장 위치
+        opt_layout.addWidget(QLabel("저장 위치"))
         self.radioSame = QRadioButton("동일 경로 (../)")
         self.radioOutput = QRadioButton("output 폴더 (../output/)")
         self.radioCustom = QRadioButton("사용자 지정 (custom)")
-
         self.radioGroup = QButtonGroup(self)
         self.radioGroup.addButton(self.radioSame)
         self.radioGroup.addButton(self.radioOutput)
         self.radioGroup.addButton(self.radioCustom)
+        opt_layout.addWidget(self.radioSame)
+        opt_layout.addWidget(self.radioOutput)
+        opt_layout.addWidget(self.radioCustom)
 
-        radio_layout.addWidget(self.radioSame)
-        radio_layout.addWidget(self.radioOutput)
-        radio_layout.addWidget(self.radioCustom)
-        layout.addLayout(radio_layout, 6, 1, 1, 2)
-
-        # 5. 저장 경로 설정 영역 (행 7)
-        layout.addWidget(QLabel("저장 경로"), 7, 0)
+        dir_box = QHBoxLayout()
         self.dirInput = QLineEdit()
         self.dirInput.textChanged.connect(self.update_output_play_btn_state)
-        layout.addWidget(self.dirInput, 7, 1)
-        self.dirBtn = QPushButton("위치 선택")
+        self.dirBtn = QPushButton("선택")
         self.dirBtn.clicked.connect(self.openDirDialog)
-        layout.addWidget(self.dirBtn, 7, 2)
+        dir_box.addWidget(self.dirInput, 1)
+        dir_box.addWidget(self.dirBtn, 0)
+        opt_layout.addWidget(QLabel("저장 경로"))
+        opt_layout.addLayout(dir_box)
 
-        # 6. 작업 히스토리 영역 (행 8)
-        layout.addWidget(QLabel("작업 히스토리"), 8, 0)
+        # 1-4. 작업 히스토리 및 최근 작업 폴더
+        opt_layout.addWidget(QLabel("작업 히스토리"))
         self.taskHistoryCombo = QComboBox()
         self.taskHistoryCombo.currentIndexChanged.connect(self.on_task_history_selected)
-        layout.addWidget(self.taskHistoryCombo, 8, 1, 1, 2)
+        opt_layout.addWidget(self.taskHistoryCombo)
 
-        # 6-1. 최근 작업 폴더 및 위치 열기 (행 9)
-        layout.addWidget(QLabel("최근 작업 폴더"), 9, 0)
+        opt_layout.addWidget(QLabel("최근 작업 폴더"))
+        hist_box = QHBoxLayout()
         self.historyCombo = QComboBox()
         self.historyCombo.currentIndexChanged.connect(self.on_history_combo_changed)
-        layout.addWidget(self.historyCombo, 9, 1)
-
-        self.openDirBtn = QPushButton("위치 열기")
+        self.openDirBtn = QPushButton("열기")
         self.openDirBtn.clicked.connect(self.open_current_directory)
-        layout.addWidget(self.openDirBtn, 9, 2)
+        hist_box.addWidget(self.historyCombo, 1)
+        hist_box.addWidget(self.openDirBtn, 0)
+        opt_layout.addLayout(hist_box)
 
-        # 7. 실행 트리거 (행 10)
+        opt_layout.addStretch()
+
+        # 1-5. 무손실 컷팅 실행 버튼
         self.runBtn = QPushButton("무손실 컷팅 실행")
-        self.runBtn.setStyleSheet(
-            "font-weight: bold; background-color: #2b579a; color: white; padding: 10px; margin-top: 10px;"
-        )
+        self.runBtn.setStyleSheet("font-weight: bold; background-color: #2b579a; color: white; padding: 10px; border-radius: 4px;")
         self.runBtn.clicked.connect(self.executeCutter)
-        layout.addWidget(self.runBtn, 10, 0, 1, 3)
+        opt_layout.addWidget(self.runBtn)
 
-        left_layout.addLayout(layout)
+        # 2. 중앙 메인 플레이어 영역
+        center_container = QWidget()
+        center_layout = QVBoxLayout(center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
 
-        # 우측 플레이리스트 사이드바 패널
+        self.player_widget = EmbeddedVideoPlayer(self)
+        center_layout.addWidget(self.player_widget, 1)
+
+        # 숨김 입력 필드 유지 (데이터 연동 및 백엔드 호환용)
+        self.fileInput = QLineEdit()
+        self.fileInput.textChanged.connect(self.on_file_changed)
+        self.startInput = ArrowKeyLineEdit("00:00:00.00")
+        self.endInput = ArrowKeyLineEdit("00:00:00.00")
+
+        # 썸네일 타임라인 슬라이더와 시작/종료 문자열 안전한 양방향 연동 (무한 루프 재귀 방지)
+        self.player_widget.trimming_slider.start_changed.connect(self.on_trim_start_changed)
+        self.player_widget.trimming_slider.end_changed.connect(self.on_trim_end_changed)
+        self.startInput.textChanged.connect(self.on_start_input_text_changed)
+        self.endInput.textChanged.connect(self.on_end_input_text_changed)
+
+        # 3. 우측 재생 목록 사이드바 패널
         self.playlist_files = []
         self.playlist_sidebar = QFrame()
         self.playlist_sidebar.setFixedWidth(240)
@@ -920,7 +1125,8 @@ class VideoCutterApp(QWidget):
         self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_item_double_clicked)
         sidebar_layout.addWidget(self.playlist_widget)
 
-        root_layout.addWidget(left_container, 1)
+        root_layout.addWidget(self.option_sidebar, 0)
+        root_layout.addWidget(center_container, 1)
         root_layout.addWidget(self.playlist_sidebar, 0)
 
         # Radio buttons connections
@@ -972,6 +1178,36 @@ class VideoCutterApp(QWidget):
                 json.dump(self.playlist_files, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logging.error(f"Failed to save playlist history: {e}")
+
+    def on_trim_start_changed(self, ms: int):
+        new_str = ms_to_time_str(ms)
+        if self.startInput.displayText() != new_str:
+            self.startInput.blockSignals(True)
+            self.startInput.setText(new_str)
+            self.startInput.blockSignals(False)
+
+    def on_trim_end_changed(self, ms: int):
+        new_str = ms_to_time_str(ms)
+        if self.endInput.displayText() != new_str:
+            self.endInput.blockSignals(True)
+            self.endInput.setText(new_str)
+            self.endInput.blockSignals(False)
+
+    def on_start_input_text_changed(self, txt: str):
+        ms = self.startInput.time_to_centiseconds(txt) * 10
+        if self.player_widget.trimming_slider.start_ms != ms:
+            self.player_widget.trimming_slider.set_start_ms(ms)
+
+    def on_end_input_text_changed(self, txt: str):
+        ms = self.endInput.time_to_centiseconds(txt) * 10
+        if self.player_widget.trimming_slider.end_ms != ms:
+            self.player_widget.trimming_slider.set_end_ms(ms)
+
+    def toggle_option_sidebar(self):
+        if self.option_sidebar.isVisible():
+            self.option_sidebar.hide()
+        else:
+            self.option_sidebar.show()
 
     def toggle_playlist_sidebar(self):
         if self.playlist_sidebar.isVisible():
@@ -1483,6 +1719,8 @@ class VideoCutterApp(QWidget):
             self.player_widget.toggle_fullscreen()
         elif event.key() == Qt.Key.Key_Escape and self.isFullScreen():
             self.showNormal()
+        elif event.key() == Qt.Key.Key_BracketLeft or event.text() == '[':
+            self.toggle_option_sidebar()
         elif event.key() == Qt.Key.Key_BracketRight or event.text() == ']':
             self.toggle_playlist_sidebar()
         elif event.key() == Qt.Key.Key_Question or (event.key() == Qt.Key.Key_Slash and (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)):
@@ -1497,13 +1735,20 @@ class VideoCutterApp(QWidget):
 
 if __name__ == "__main__":
     try:
-        # 유저님의 고유 앱 ID 지정 (형식: 회사명.파일명.버전)
-        myappid = "mycompany.mp4trimmer.cutter.1.0"
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        try:
+            myappid = "mycompany.mp4trimmer.cutter.1.0"
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception as e:
+            logging.warning(f"Failed to set AppUserModelID: {e}")
+        app = QApplication(sys.argv)
+        ex = VideoCutterApp()
+        icon_path = os.path.join(APP_DIR, "dist", "icon.ico")
+        if not os.path.exists(icon_path):
+            icon_path = os.path.join(APP_DIR, "icon.ico")
+        if os.path.exists(icon_path):
+            ex.setWindowIcon(QIcon(icon_path))
+        ex.show()
+        sys.exit(app.exec())
     except Exception as e:
-        print("작업표시줄 아이콘 프로세스 등록 실패:", e)
-    app = QApplication(sys.argv)
-    ex = VideoCutterApp()
-    ex.setWindowIcon(QIcon("dist/icon.ico"))
-    ex.show()
-    sys.exit(app.exec())
+        logging.critical("Fatal crash in main execution block!", exc_info=True)
+        raise
