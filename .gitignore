@@ -1,6 +1,26 @@
-/build
-/dist/mp4-trim.exe
-/dist/task_history.json
-/dist/trim_history.json
-mp4-trim.spec
+# PyInstaller & Build Directory
+/build/
+/dist/
+*.spec
+
+# Python Cache & Bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Application Runtime Logs & Crash Dumps
+*.log
+*.txt
+!README.md
+
+# Application User Data & History
+hotkeys.json
+playlist_history.json
+task_history.json
+trim_history.json
+
+# Temporary Executables & Scratch Scripts
 ffmpeg.exe
+test_crash.py
+test_crash.spec
