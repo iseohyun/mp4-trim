@@ -1,0 +1,200 @@
+import os
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+from src.ui.widgets.timeline import TrimmingSliderWidget, ThumbnailGeneratorThread
+from src.utils.time_utils import ms_to_time_str
+
+class EmbeddedVideoPlayer(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(280)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        self.media_player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.media_player.setAudioOutput(self.audio_output)
+
+        # 1. 상단 동영상 화면
+        self.video_widget = QVideoWidget(self)
+        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.media_player.setVideoOutput(self.video_widget)
+        main_layout.addWidget(self.video_widget, 1)
+
+        # 2. 하단 100% 필름스트립 타임라인 슬라이더
+        self.trimming_slider = TrimmingSliderWidget(self)
+        self.trimming_slider.position_changed.connect(self.media_player.setPosition)
+        main_layout.addWidget(self.trimming_slider, 0)
+
+        # 3. 비디오 화면 위 마우스 호버 오버레이 패널
+        self.overlay = QFrame(self.video_widget)
+        self.overlay.setStyleSheet("QFrame { background-color: rgba(15, 20, 28, 0.75); border-radius: 8px; }")
+
+        ov_layout = QVBoxLayout(self.overlay)
+        ov_layout.setContentsMargins(10, 8, 10, 8)
+
+        # 중앙 큰 재생/일시정지 버튼
+        btn_box = QHBoxLayout()
+        self.center_play_btn = QPushButton("▶")
+        self.center_play_btn.setFixedSize(48, 48)
+        self.center_play_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 22px; color: white; background-color: rgba(0, 0, 0, 0.6);
+                border: 2px solid rgba(255, 255, 255, 0.7); border-radius: 24px;
+            }
+            QPushButton:hover { background-color: rgba(0, 120, 215, 0.85); border-color: #0078d7; }
+        """)
+        self.center_play_btn.clicked.connect(self.toggle_play)
+        btn_box.addStretch()
+        btn_box.addWidget(self.center_play_btn)
+        btn_box.addStretch()
+        ov_layout.addLayout(btn_box)
+
+        # 하단 컨트롤 바 (시간표시, 전체화면)
+        bottom_box = QHBoxLayout()
+        bottom_box.setSpacing(8)
+
+        self.time_label = QLabel("00:00:00.00 / 00:00:00.00")
+        self.time_label.setStyleSheet("color: white; font-weight: bold; font-family: Consolas, monospace; font-size: 13px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;")
+
+        self.fullscreen_btn = QPushButton("⛶")
+        self.fullscreen_btn.setStyleSheet("QPushButton { color: white; background-color: #444; padding: 4px 8px; border-radius: 4px; font-size: 14px; } QPushButton:hover { background-color: #666; }")
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+
+        bottom_box.addWidget(self.time_label)
+        bottom_box.addStretch()
+        bottom_box.addWidget(self.fullscreen_btn)
+
+        ov_layout.addLayout(bottom_box)
+
+        # 시그널 연결
+        self.media_player.positionChanged.connect(self.on_position_changed)
+        self.media_player.durationChanged.connect(self.on_duration_changed)
+        self.media_player.playbackStateChanged.connect(self.on_playback_state_changed)
+        if hasattr(self.video_widget, 'videoSink') and self.video_widget.videoSink():
+            self.video_widget.videoSink().videoSizeChanged.connect(self.update_video_aspect)
+
+        # 오버레이 자동 숨김 타이머
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setInterval(2500)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.hide_overlay)
+
+        self.drag_start_pos = None
+
+    def update_video_aspect(self):
+        pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        vw_w = self.video_widget.width()
+        vw_h = self.video_widget.height()
+        ov_h = 100
+        self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
+        self.overlay.raise_()
+
+    def mouseMoveEvent(self, event):
+        self.show_overlay()
+        if event.buttons() == Qt.MouseButton.LeftButton and self.drag_start_pos is not None:
+            top_win = self.window()
+            if top_win and not top_win.isFullScreen():
+                top_win.move(top_win.pos() + event.globalPosition().toPoint() - self.drag_start_pos)
+                self.drag_start_pos = event.globalPosition().toPoint()
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start_pos = event.globalPosition().toPoint()
+            self.show_overlay()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.toggle_fullscreen()
+        super().mouseDoubleClickEvent(event)
+
+    def show_overlay(self):
+        self.overlay.show()
+        self.hide_timer.start()
+
+    def hide_overlay(self):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.overlay.hide()
+
+    def step_time(self, delta_ms: int):
+        if self.media_player.duration() > 0:
+            pos = self.media_player.position() + delta_ms
+            pos = max(0, min(self.media_player.duration(), pos))
+            self.media_player.setPosition(pos)
+
+    def step_frame(self, forward=True):
+        if self.media_player.duration() > 0:
+            frame_ms = 33  # ~30fps 1프레임
+            pos = self.media_player.position()
+            pos = pos + frame_ms if forward else pos - frame_ms
+            pos = max(0, min(self.media_player.duration(), pos))
+            self.media_player.setPosition(pos)
+
+    def load_video(self, file_path: str, auto_play=True):
+        if file_path and os.path.isfile(file_path):
+            self.media_player.setSource(QUrl.fromLocalFile(file_path))
+            if auto_play:
+                self.media_player.play()
+            self.show_overlay()
+
+            # 썸네일 필름스트립 스레드 시작
+            if hasattr(self, 'thumb_thread') and self.thumb_thread and self.thumb_thread.isRunning():
+                self.thumb_thread.terminate()
+                self.thumb_thread.wait()
+
+            self.trimming_slider.set_thumbnails([])
+            self.thumb_thread = ThumbnailGeneratorThread(file_path, count=10, parent=self)
+            self.thumb_thread.thumbnails_ready.connect(self.trimming_slider.set_thumbnail_files)
+            self.thumb_thread.start()
+
+    def toggle_play(self):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+        else:
+            self.media_player.play()
+        self.show_overlay()
+
+    def on_playback_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self.center_play_btn.setText("⏸")
+        else:
+            self.center_play_btn.setText("▶")
+            self.overlay.show()
+
+    def set_position(self, position):
+        self.media_player.setPosition(position)
+
+    def on_position_changed(self, position_ms):
+        self.trimming_slider.set_position(position_ms)
+        dur_ms = self.media_player.duration()
+        self.time_label.setText(f"{ms_to_time_str(position_ms)} / {ms_to_time_str(dur_ms)}")
+
+    def on_duration_changed(self, duration_ms):
+        self.trimming_slider.set_duration(duration_ms)
+        pos_ms = self.media_player.position()
+        self.time_label.setText(f"{ms_to_time_str(pos_ms)} / {ms_to_time_str(duration_ms)}")
+
+    def toggle_fullscreen(self):
+        w = self.window()
+        if w:
+            if w.isFullScreen():
+                w.showNormal()
+            else:
+                w.showFullScreen()

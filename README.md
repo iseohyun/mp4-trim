@@ -42,10 +42,17 @@
 
 ```
 mp4-trim
+├ src/
+│  ├ core/                  # 핵심 로직 (FFmpeg 컷팅, 메타데이터/속성 추출, 커스텀 단축키)
+│  ├ ui/                    # UI 컴포넌트 & 다이얼로그
+│  │  ├ widgets/            # 커스텀 타임라인, 비디오 플레이어, 시간 입력 필드 위젯
+│  │  ├ dialogs/            # 단축키 지정 대화상자
+│  │  └ main_window.py      # VideoCutterApp 메인 윈도우 레이아웃 및 이벤트 연동
+│  └ utils/                 # 예외 로깅 팝업 및 시간 변환 포맷 유틸리티
 ├ icon.ico              : 프로그램 메인 아이콘
 ├ MP4-Trim image.png    : README 대표 스크린샷 이미지
 ├ build.bat             : Stand-alone 무손실 분할기 빌드 스크립트 (경량화 / 풀패키지)
-├ mp4-trim.py           : 메인 소스 코드
+├ mp4-trim.py           : 실행 시작점 (Main Entry Point)
 ├ README.md             : 사용 설명서 및 프로젝트 정보
 └ .gitignore            : Git 추적 제외 규칙 파일
 ```

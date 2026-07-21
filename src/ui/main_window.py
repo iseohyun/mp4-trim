@@ -1,0 +1,1074 @@
+import sys
+import os
+import json
+import subprocess
+import copy
+import logging
+from datetime import datetime, timedelta
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QCheckBox, QRadioButton, QButtonGroup, QComboBox, QFrame, QStackedWidget,
+    QListWidget, QListWidgetItem, QMenu, QFileDialog, QMessageBox, QScrollArea,
+    QApplication
+)
+from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction
+
+from src.utils.logger import APP_DIR
+from src.utils.time_utils import ms_to_time_str
+from src.core.metadata import (
+    get_ffmpeg_path, get_unique_filename, show_file_properties,
+    open_source_file_dir, get_media_creation_time_and_duration
+)
+from src.core.hotkeys import DEFAULT_HOTKEYS, event_to_key_str
+from src.ui.widgets.line_edit import ArrowKeyLineEdit
+from src.ui.widgets.player import EmbeddedVideoPlayer
+from src.ui.dialogs.key_capture import KeyCaptureDialog
+
+
+class VideoCutterApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.history_file = os.path.join(APP_DIR, "trim_history.json")
+        self.task_history_file = os.path.join(APP_DIR, "task_history.json")
+        self.task_histories = []
+        self.create_history_flag = True
+        self.is_loading_history = False
+        self.is_loading_file = False
+        self.last_enter_name = ""
+        self.original_duration_cs = 35999999
+        self.original_creation_dt = None
+        
+        self.default_dir = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.MoviesLocation
+        )
+        if not self.default_dir:
+            self.default_dir = QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.HomeLocation
+            )
+
+        self.load_hotkeys()
+        self.initUI()
+        self.load_history()
+        self.load_task_history()
+        self.load_playlist_history()
+
+        if len(sys.argv) > 1:
+            initial_file = sys.argv[1].strip('"\'')
+            if os.path.isfile(initial_file):
+                self.fileInput.setText(initial_file)
+                QTimer.singleShot(300, lambda: self.player_widget.load_video(initial_file, auto_play=True))
+
+    def load_hotkeys(self):
+        self.hotkeys_file = os.path.join(APP_DIR, "hotkeys.json")
+        self.hotkeys = copy.deepcopy(DEFAULT_HOTKEYS)
+        if os.path.exists(self.hotkeys_file):
+            try:
+                with open(self.hotkeys_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            if k in self.hotkeys and isinstance(v, dict):
+                                self.hotkeys[k]["primary"] = v.get("primary", self.hotkeys[k]["primary"])
+                                self.hotkeys[k]["secondary"] = v.get("secondary", self.hotkeys[k]["secondary"])
+            except Exception as e:
+                logging.error(f"Failed to load hotkeys: {e}")
+
+    def save_hotkeys(self):
+        try:
+            with open(self.hotkeys_file, "w", encoding="utf-8") as f:
+                json.dump(self.hotkeys, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"Failed to save hotkeys: {e}")
+
+    def initUI(self):
+        icon_path = os.path.join(APP_DIR, "dist", "icon.ico")
+        if not os.path.exists(icon_path):
+            icon_path = os.path.join(APP_DIR, "icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
+        self.setWindowTitle("초고속 무손실 영상 분할기 v1.0.5")
+        self.setAcceptDrops(True)
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            rect = screen.availableGeometry()
+            w = max(850, rect.width() // 2)
+            h = max(600, rect.height() // 2)
+            x = rect.x() + (rect.width() - w) // 2
+            y = rect.y() + (rect.height() - h) // 2
+            self.setGeometry(x, y, w, h)
+        else:
+            self.resize(850, 600)
+        self.setMinimumSize(700, 480)
+
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(10)
+
+        # 1. 좌측 옵션 사이드바 패널
+        self.option_sidebar = QFrame()
+        self.option_sidebar.setMinimumWidth(0)
+        self.option_sidebar.setMaximumWidth(270)
+        self.option_sidebar.setStyleSheet("""
+            QFrame { background-color: #252526; border-radius: 6px; }
+            QLabel { color: white; font-weight: bold; }
+            QLineEdit { background-color: #1e1e1e; color: white; border: 1px solid #333; border-radius: 4px; padding: 4px; }
+            QComboBox { background-color: #1e1e1e; color: white; border: 1px solid #333; border-radius: 4px; padding: 4px; }
+            QCheckBox, QRadioButton { color: #dcdcdc; }
+            QPushButton { background-color: #3e3e42; color: white; border-radius: 4px; padding: 4px 8px; }
+            QPushButton:hover { background-color: #0078d7; }
+        """)
+
+        opt_sidebar_layout = QVBoxLayout(self.option_sidebar)
+        opt_sidebar_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.option_stack = QStackedWidget()
+        opt_sidebar_layout.addWidget(self.option_stack)
+
+        # Page 0: 메인 옵션 설정 페이지
+        opt_main_page = QWidget()
+        opt_layout = QVBoxLayout(opt_main_page)
+        opt_layout.setContentsMargins(6, 6, 6, 6)
+        opt_layout.setSpacing(8)
+
+        opt_header = QHBoxLayout()
+        opt_title = QLabel("옵션 & 설정 (단축키: [)")
+        opt_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d89ef;")
+        
+        self.hotkey_btn = QPushButton("⌨")
+        self.hotkey_btn.setToolTip("단축키 안내 / 설정")
+        self.hotkey_btn.setFixedSize(26, 26)
+        self.hotkey_btn.setStyleSheet("""
+            QPushButton { background-color: #333; color: white; border-radius: 4px; font-size: 14px; font-weight: bold; border: 1px solid #444; padding: 0; }
+            QPushButton:hover { background-color: #0078d7; border-color: #0078d7; }
+        """)
+        self.hotkey_btn.clicked.connect(lambda: self.option_stack.setCurrentIndex(1))
+
+        opt_header.addWidget(opt_title, 1)
+        opt_header.addWidget(self.hotkey_btn, 0)
+        opt_layout.addLayout(opt_header)
+
+        # 1-1. 저장 파일명
+        name_box = QHBoxLayout()
+        self.nameInput = QLineEdit("output.mp4")
+        self.nameInput.textChanged.connect(self.update_output_play_btn_state)
+        self.nameInput.returnPressed.connect(self.on_name_input_enter)
+        self.nameInput.textChanged.connect(self.update_name_input_style)
+        self.playOutBtn = QPushButton("재생")
+        self.playOutBtn.setToolTip("편집영상 재생하기")
+        self.playOutBtn.setEnabled(False)
+        self.playOutBtn.clicked.connect(self.play_output_video)
+        name_box.addWidget(self.nameInput, 1)
+        name_box.addWidget(self.playOutBtn, 0)
+
+        opt_layout.addWidget(QLabel("저장 파일명"))
+        opt_layout.addLayout(name_box)
+
+        # 1-2. 저장 옵션
+        self.muteCheck = QCheckBox("음소거 (영상만 가져오기)")
+        self.copyMetaCheck = QCheckBox("속성 복사")
+        self.copyMetaCheck.setChecked(True)
+        self.autoNumberCheck = QCheckBox("자동 넘버링")
+        self.autoNumberCheck.setChecked(True)
+        opt_layout.addWidget(self.muteCheck)
+        opt_layout.addWidget(self.copyMetaCheck)
+        opt_layout.addWidget(self.autoNumberCheck)
+
+        # 1-3. 저장 위치
+        opt_layout.addWidget(QLabel("저장 위치"))
+        self.radioSame = QRadioButton("동일 경로 (../)")
+        self.radioOutput = QRadioButton("output 폴더 (../output/)")
+        self.radioCustom = QRadioButton("사용자 지정 (custom)")
+        self.radioGroup = QButtonGroup(self)
+        self.radioGroup.addButton(self.radioSame)
+        self.radioGroup.addButton(self.radioOutput)
+        self.radioGroup.addButton(self.radioCustom)
+        opt_layout.addWidget(self.radioSame)
+        opt_layout.addWidget(self.radioOutput)
+        opt_layout.addWidget(self.radioCustom)
+
+        dir_box = QHBoxLayout()
+        self.dirInput = QLineEdit()
+        self.dirInput.textChanged.connect(self.update_output_play_btn_state)
+        self.dirBtn = QPushButton("선택")
+        self.dirBtn.clicked.connect(self.openDirDialog)
+        dir_box.addWidget(self.dirInput, 1)
+        dir_box.addWidget(self.dirBtn, 0)
+        opt_layout.addWidget(QLabel("저장 경로"))
+        opt_layout.addLayout(dir_box)
+
+        # 1-4. 작업 히스토리 및 최근 작업 폴더
+        opt_layout.addWidget(QLabel("작업 히스토리"))
+        self.taskHistoryCombo = QComboBox()
+        self.taskHistoryCombo.currentIndexChanged.connect(self.on_task_history_selected)
+        opt_layout.addWidget(self.taskHistoryCombo)
+
+        opt_layout.addWidget(QLabel("최근 작업 폴더"))
+        hist_box = QHBoxLayout()
+        self.historyCombo = QComboBox()
+        self.historyCombo.currentIndexChanged.connect(self.on_history_combo_changed)
+        self.openDirBtn = QPushButton("열기")
+        self.openDirBtn.clicked.connect(self.open_current_directory)
+        hist_box.addWidget(self.historyCombo, 1)
+        hist_box.addWidget(self.openDirBtn, 0)
+        opt_layout.addLayout(hist_box)
+
+        opt_layout.addStretch()
+
+        # 1-5. 무손실 컷팅 실행 버튼
+        self.runBtn = QPushButton("무손실 컷팅 실행")
+        self.runBtn.setStyleSheet("font-weight: bold; background-color: #2b579a; color: white; padding: 10px; border-radius: 4px;")
+        self.runBtn.clicked.connect(self.executeCutter)
+        opt_layout.addWidget(self.runBtn)
+
+        # Page 1: 단축키 설정 페이지
+        opt_hotkey_page = self.build_hotkey_settings_page()
+
+        self.option_stack.addWidget(opt_main_page)
+        self.option_stack.addWidget(opt_hotkey_page)
+
+        # 2. 중앙 메인 플레이어 영역
+        center_container = QWidget()
+        center_layout = QVBoxLayout(center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+
+        self.player_widget = EmbeddedVideoPlayer(self)
+        center_layout.addWidget(self.player_widget, 1)
+
+        # 숨김 입력 필드 유지
+        self.fileInput = QLineEdit()
+        self.fileInput.textChanged.connect(self.on_file_changed)
+        self.startInput = ArrowKeyLineEdit("00:00:00.00")
+        self.endInput = ArrowKeyLineEdit("00:00:00.00")
+
+        self.player_widget.trimming_slider.start_changed.connect(self.on_trim_start_changed)
+        self.player_widget.trimming_slider.end_changed.connect(self.on_trim_end_changed)
+        self.startInput.textChanged.connect(self.on_start_input_text_changed)
+        self.endInput.textChanged.connect(self.on_end_input_text_changed)
+
+        # 3. 우측 재생 목록 사이드바 패널
+        self.playlist_files = []
+        self.playlist_sidebar = QFrame()
+        self.playlist_sidebar.setMinimumWidth(0)
+        self.playlist_sidebar.setMaximumWidth(240)
+        self.playlist_sidebar.setStyleSheet("""
+            QFrame { background-color: #252526; border-radius: 6px; }
+            QLabel { color: white; font-weight: bold; }
+            QListWidget { background-color: #1e1e1e; color: #dcdcdc; border: 1px solid #333; border-radius: 4px; }
+            QListWidget::item { padding: 3px 5px; margin: 0px; border-bottom: 1px solid #2a2a2a; font-size: 12px; }
+            QListWidget::item:hover { background-color: #2a2d32; }
+            QListWidget::item:selected { background-color: #0078d7; color: white; }
+        """)
+
+        sidebar_layout = QVBoxLayout(self.playlist_sidebar)
+        sidebar_layout.setContentsMargins(8, 8, 8, 8)
+
+        sb_header = QHBoxLayout()
+        sb_title = QLabel("재생 목록 (단축키: ])")
+        self.add_file_btn = QPushButton("+ 추가")
+        self.add_file_btn.setStyleSheet("background-color: #2d89ef; color: white; padding: 4px 8px; font-weight: bold; border-radius: 4px;")
+        self.add_file_btn.clicked.connect(self.openFileDialog)
+        sb_header.addWidget(sb_title)
+        sb_header.addStretch()
+        sb_header.addWidget(self.add_file_btn)
+        sidebar_layout.addLayout(sb_header)
+
+        self.playlist_widget = QListWidget()
+        self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.playlist_widget.customContextMenuRequested.connect(self.on_playlist_context_menu)
+        self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_item_double_clicked)
+        sidebar_layout.addWidget(self.playlist_widget)
+
+        root_layout.addWidget(self.option_sidebar, 0)
+        root_layout.addWidget(center_container, 1)
+        root_layout.addWidget(self.playlist_sidebar, 0)
+
+        # Radio buttons connections
+        self.radioSame.toggled.connect(self.on_radio_changed)
+        self.radioOutput.toggled.connect(self.on_radio_changed)
+        self.radioCustom.toggled.connect(self.on_radio_changed)
+
+        self.radioOutput.setChecked(True)
+
+        self.fileInput.textChanged.connect(self.on_input_modified)
+        self.startInput.textChanged.connect(self.on_input_modified)
+        self.endInput.textChanged.connect(self.on_input_modified)
+        self.nameInput.textChanged.connect(self.on_input_modified)
+        self.dirInput.textChanged.connect(self.on_input_modified)
+        self.muteCheck.stateChanged.connect(self.on_input_modified)
+        self.copyMetaCheck.stateChanged.connect(self.on_input_modified)
+        self.autoNumberCheck.stateChanged.connect(self.on_input_modified)
+        self.radioSame.toggled.connect(self.on_input_modified)
+        self.radioOutput.toggled.connect(self.on_input_modified)
+        self.radioCustom.toggled.connect(self.on_input_modified)
+
+    def build_hotkey_settings_page(self):
+        opt_hotkey_page = QWidget()
+        hk_layout = QVBoxLayout(opt_hotkey_page)
+        hk_layout.setContentsMargins(6, 6, 6, 6)
+        hk_layout.setSpacing(6)
+
+        hk_header = QHBoxLayout()
+        self.hk_back_btn = QPushButton("← 뒤로")
+        self.hk_back_btn.setStyleSheet("""
+            QPushButton { background-color: #383838; color: white; border-radius: 4px; padding: 3px 8px; font-size: 11px; font-weight: bold; }
+            QPushButton:hover { background-color: #0078d7; }
+        """)
+        self.hk_back_btn.clicked.connect(lambda: self.option_stack.setCurrentIndex(0))
+
+        hk_title = QLabel("단축키 설정")
+        hk_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d89ef;")
+
+        self.hk_reset_btn = QPushButton("초기화")
+        self.hk_reset_btn.setStyleSheet("""
+            QPushButton { background-color: #552222; color: white; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
+            QPushButton:hover { background-color: #d13438; }
+        """)
+        self.hk_reset_btn.clicked.connect(self.reset_hotkeys_to_default)
+
+        hk_header.addWidget(self.hk_back_btn, 0)
+        hk_header.addStretch()
+        hk_header.addWidget(hk_title, 0)
+        hk_header.addStretch()
+        hk_header.addWidget(self.hk_reset_btn, 0)
+        hk_layout.addLayout(hk_header)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        scroll_content = QWidget()
+        self.hotkey_list_layout = QVBoxLayout(scroll_content)
+        self.hotkey_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.hotkey_list_layout.setSpacing(4)
+
+        scroll_area.setWidget(scroll_content)
+        hk_layout.addWidget(scroll_area, 1)
+
+        self.refresh_hotkey_table()
+        return opt_hotkey_page
+
+    def refresh_hotkey_table(self):
+        while self.hotkey_list_layout.count():
+            child = self.hotkey_list_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        for action_id, info in self.hotkeys.items():
+            row_frame = QFrame()
+            row_frame.setStyleSheet("QFrame { background-color: #1e1e1e; border-radius: 4px; }")
+            row_layout = QHBoxLayout(row_frame)
+            row_layout.setContentsMargins(6, 4, 6, 4)
+            row_layout.setSpacing(4)
+
+            name_lbl = QLabel(info['name'])
+            name_lbl.setStyleSheet("font-size: 11px; color: #dcdcdc; font-weight: normal;")
+            row_layout.addWidget(name_lbl, 1)
+
+            btn_p = QPushButton(info['primary'] if info['primary'] else "None")
+            btn_p.setFixedWidth(55)
+            btn_p.setToolTip("기본 단축키 변경")
+            btn_p.setStyleSheet("""
+                QPushButton { background-color: #333; color: #2d89ef; border: 1px solid #444; border-radius: 3px; font-size: 10px; font-weight: bold; padding: 2px; }
+                QPushButton:hover { background-color: #0078d7; color: white; }
+            """)
+            btn_p.clicked.connect(lambda _, a=action_id, t='primary': self.change_hotkey(a, t))
+
+            btn_s = QPushButton(info['secondary'] if info['secondary'] else "None")
+            btn_s.setFixedWidth(55)
+            btn_s.setToolTip("보조 단축키 변경")
+            btn_s.setStyleSheet("""
+                QPushButton { background-color: #333; color: #888; border: 1px solid #444; border-radius: 3px; font-size: 10px; padding: 2px; }
+                QPushButton:hover { background-color: #0078d7; color: white; }
+            """)
+            btn_s.clicked.connect(lambda _, a=action_id, t='secondary': self.change_hotkey(a, t))
+
+            row_layout.addWidget(btn_p, 0)
+            row_layout.addWidget(btn_s, 0)
+
+            self.hotkey_list_layout.addWidget(row_frame)
+
+        self.hotkey_list_layout.addStretch()
+
+    def change_hotkey(self, action_id: str, key_type: str):
+        action_name = self.hotkeys[action_id]['name']
+        type_str = "기본" if key_type == "primary" else "보조"
+        dlg = KeyCaptureDialog(action_name, type_str, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.captured_key_str is not None:
+            self.hotkeys[action_id][key_type] = dlg.captured_key_str
+            self.save_hotkeys()
+            self.refresh_hotkey_table()
+
+    def reset_hotkeys_to_default(self):
+        res = QMessageBox.question(
+            self, "확인", "모든 단축키를 초기 설정으로 복원하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if res == QMessageBox.StandardButton.Yes:
+            self.hotkeys = copy.deepcopy(DEFAULT_HOTKEYS)
+            self.save_hotkeys()
+            self.refresh_hotkey_table()
+
+    def get_active_working_dir(self):
+        if self.historyCombo.currentIndex() >= 0:
+            current_path = self.historyCombo.currentText()
+            if os.path.exists(current_path):
+                return current_path
+        return self.default_dir
+
+    def on_trim_start_changed(self, ms: int):
+        new_str = ms_to_time_str(ms)
+        if self.startInput.displayText() != new_str:
+            self.startInput.blockSignals(True)
+            self.startInput.setText(new_str)
+            self.startInput.blockSignals(False)
+
+    def on_trim_end_changed(self, ms: int):
+        new_str = ms_to_time_str(ms)
+        if self.endInput.displayText() != new_str:
+            self.endInput.blockSignals(True)
+            self.endInput.setText(new_str)
+            self.endInput.blockSignals(False)
+
+    def on_start_input_text_changed(self, txt: str):
+        ms = self.startInput.time_to_centiseconds(txt) * 10
+        if self.player_widget.trimming_slider.start_ms != ms:
+            self.player_widget.trimming_slider.set_start_ms(ms)
+
+    def on_end_input_text_changed(self, txt: str):
+        ms = self.endInput.time_to_centiseconds(txt) * 10
+        if self.player_widget.trimming_slider.end_ms != ms:
+            self.player_widget.trimming_slider.set_end_ms(ms)
+
+    def animate_sidebar(self, widget: QFrame, target_width: int):
+        if hasattr(widget, '_anim') and widget._anim:
+            try:
+                if widget._anim.state() == QPropertyAnimation.State.Running:
+                    widget._anim.stop()
+            except RuntimeError:
+                pass
+            widget._anim = None
+
+        is_closing = widget.isVisible() and widget.width() > 10
+
+        anim = QPropertyAnimation(widget, b"maximumWidth", self)
+        widget._anim = anim
+        anim.setDuration(220)
+
+        if is_closing:
+            anim.setStartValue(widget.width())
+            anim.setEndValue(0)
+            anim.setEasingCurve(QEasingCurve.Type.InQuad)
+            def on_closed():
+                widget.setVisible(False)
+                widget.setMaximumWidth(target_width)
+                widget._anim = None
+            anim.finished.connect(on_closed)
+        else:
+            widget.setVisible(True)
+            anim.setStartValue(widget.width() if widget.width() < target_width else 0)
+            anim.setEndValue(target_width)
+            anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+            def on_opened():
+                widget.setMaximumWidth(target_width)
+                widget._anim = None
+            anim.finished.connect(on_opened)
+
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def toggle_option_sidebar(self):
+        self.animate_sidebar(self.option_sidebar, target_width=270)
+
+    def toggle_playlist_sidebar(self):
+        self.animate_sidebar(self.playlist_sidebar, target_width=240)
+
+    def load_playlist_history(self):
+        history_path = os.path.join(APP_DIR, "playlist_history.json")
+        if os.path.exists(history_path):
+            try:
+                with open(history_path, "r", encoding="utf-8") as f:
+                    saved_paths = json.load(f)
+                    if isinstance(saved_paths, list):
+                        self.playlist_files = []
+                        self.playlist_widget.clear()
+                        for path in saved_paths:
+                            if isinstance(path, str):
+                                norm_p = path.replace('\\', '/')
+                                if os.path.isfile(norm_p):
+                                    self.add_file_to_playlist(norm_p, load_immediately=False, save_history=False)
+                        self.save_playlist_history()
+            except Exception as e:
+                logging.error(f"Failed to load playlist history: {e}")
+
+    def save_playlist_history(self):
+        history_path = os.path.join(APP_DIR, "playlist_history.json")
+        try:
+            with open(history_path, "w", encoding="utf-8") as f:
+                json.dump(self.playlist_files, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"Failed to save playlist history: {e}")
+
+    def add_file_to_playlist(self, file_path: str, load_immediately=True, save_history=True):
+        file_path = file_path.replace('\\', '/')
+        if file_path and os.path.isfile(file_path):
+            if file_path not in self.playlist_files:
+                self.playlist_files.append(file_path)
+                item = QListWidgetItem(os.path.basename(file_path))
+                item.setToolTip(file_path)
+                item.setData(Qt.ItemDataRole.UserRole, file_path)
+                self.playlist_widget.addItem(item)
+            
+            for i in range(self.playlist_widget.count()):
+                it = self.playlist_widget.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == file_path:
+                    self.playlist_widget.setCurrentItem(it)
+                    break
+
+            if save_history:
+                self.save_playlist_history()
+
+            if load_immediately:
+                self.fileInput.setText(file_path)
+
+    def remove_selected_playlist_item(self):
+        item = self.playlist_widget.currentItem()
+        if item:
+            file_path = item.data(Qt.ItemDataRole.UserRole)
+            row = self.playlist_widget.row(item)
+            self.playlist_widget.takeItem(row)
+            if file_path in self.playlist_files:
+                self.playlist_files.remove(file_path)
+                self.save_playlist_history()
+
+    def clear_playlist(self):
+        self.playlist_widget.clear()
+        self.playlist_files.clear()
+        self.save_playlist_history()
+
+    def on_playlist_item_double_clicked(self, item):
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        if file_path and os.path.isfile(file_path):
+            self.fileInput.setText(file_path)
+            self.player_widget.load_video(file_path, auto_play=True)
+
+    def on_playlist_context_menu(self, pos):
+        item = self.playlist_widget.itemAt(pos)
+        menu = QMenu(self)
+
+        if item:
+            file_path = item.data(Qt.ItemDataRole.UserRole)
+
+            open_folder_act = QAction("폴더 열기", menu)
+            open_folder_act.triggered.connect(lambda: open_source_file_dir(file_path))
+
+            props_act = QAction("속성 보기 (단축키: ?)", menu)
+            props_act.triggered.connect(lambda: show_file_properties(file_path))
+
+            remove_act = QAction("목록에서 제거 (Del)", menu)
+            remove_act.triggered.connect(self.remove_selected_playlist_item)
+
+            menu.addAction(open_folder_act)
+            menu.addAction(props_act)
+            menu.addSeparator()
+            menu.addAction(remove_act)
+
+        clear_all_act = QAction("전체 목록 비우기", menu)
+        clear_all_act.triggered.connect(self.clear_playlist)
+        menu.addAction(clear_all_act)
+
+        menu.exec(self.playlist_widget.mapToGlobal(pos))
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        first = None
+        for u in urls:
+            f = u.toLocalFile()
+            if os.path.isfile(f) and f.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+                self.add_file_to_playlist(f, load_immediately=False)
+                if not first:
+                    first = f
+        if first:
+            self.fileInput.setText(first)
+
+    def openFileDialog(self):
+        start_dir = self.get_active_working_dir()
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "비디오 파일 선택", start_dir, "Video Files (*.mp4 *.mkv *.mov *.avi *.webm)"
+        )
+        if files:
+            for f in files:
+                self.add_file_to_playlist(f, load_immediately=False)
+            self.fileInput.setText(files[0])
+
+    def on_file_changed(self, text):
+        self.is_loading_file = True
+        try:
+            self.update_output_dir()
+            is_exist = os.path.isfile(text)
+            if is_exist:
+                self.add_file_to_playlist(text, load_immediately=False)
+                self.player_widget.load_video(text, auto_play=False)
+                self.save_history(os.path.dirname(text))
+                try:
+                    duration_cs, creation_dt = get_media_creation_time_and_duration(text)
+                    self.original_duration_cs = duration_cs
+                    self.original_creation_dt = creation_dt
+                    
+                    self.startInput.max_val_cs = duration_cs
+                    self.endInput.max_val_cs = duration_cs
+                    
+                    start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
+                    end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
+                    
+                    if start_cs > duration_cs:
+                        start_cs = duration_cs
+                    if end_cs > duration_cs or end_cs == 0:
+                        end_cs = duration_cs
+                    
+                    self.startInput.setText(self.startInput.centiseconds_to_time(start_cs))
+                    self.endInput.setText(self.endInput.centiseconds_to_time(end_cs))
+                except Exception as e:
+                    import traceback
+                    error_msg = traceback.format_exc()
+                    print("Error parsing media:", error_msg)
+                    QMessageBox.warning(
+                        self,
+                        "미디어 정보 분석 실패",
+                        f"동영상 정보(재생 시간)를 가져오지 못했습니다.\n기본 제한 시간(99:59:59.99)이 적용됩니다.\n\n상세 에러:\n{str(e)}"
+                    )
+                    self.original_duration_cs = 35999999
+                    self.original_creation_dt = None
+                    self.startInput.max_val_cs = 35999999
+                    self.endInput.max_val_cs = 35999999
+            else:
+                self.original_duration_cs = 35999999
+                self.original_creation_dt = None
+                self.startInput.max_val_cs = 35999999
+                self.endInput.max_val_cs = 35999999
+        finally:
+            self.is_loading_file = False
+
+    def openDirDialog(self):
+        start_dir = self.get_active_working_dir()
+        directory = QFileDialog.getExistingDirectory(self, "저장 폴더 선택", start_dir)
+        if directory:
+            self.dirInput.setText(directory.replace('\\', '/'))
+
+    def open_current_directory(self):
+        target_dir = self.dirInput.text()
+        if not target_dir or not os.path.exists(os.path.normpath(target_dir)):
+            target_dir = self.get_active_working_dir()
+            
+        normalized_dir = os.path.normpath(target_dir) if target_dir else ""
+        if not normalized_dir or not os.path.exists(normalized_dir):
+            QMessageBox.warning(
+                self, "경고", "지정된 저장 위치 경로가 하드디스크에 실재하지 않습니다."
+            )
+            return
+        try:
+            os.startfile(normalized_dir)
+        except Exception as e:
+            QMessageBox.critical(self, "에러", f"폴더 열기 실패:\n{str(e)}")
+
+    def adjust_time_input(self, line_edit: ArrowKeyLineEdit, delta_sec: float):
+        current_cs = line_edit.time_to_centiseconds(line_edit.displayText())
+        new_cs = max(0, min(line_edit.max_val_cs, current_cs + int(delta_sec * 100)))
+        line_edit.setText(line_edit.centiseconds_to_time(new_cs))
+
+    def play_source_video(self):
+        video_path = self.fileInput.text()
+        if video_path and os.path.isfile(video_path):
+            self.player_widget.load_video(video_path, auto_play=True)
+            start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
+            if start_cs > 0:
+                self.player_widget.set_position(start_cs * 10)
+        else:
+            QMessageBox.warning(self, "경고", "올바른 원본 파일이 선택되지 않았습니다.")
+
+    def view_source_properties(self):
+        video_path = self.fileInput.text()
+        if video_path and os.path.isfile(video_path):
+            show_file_properties(video_path)
+        else:
+            QMessageBox.warning(self, "경고", "올바른 원본 파일이 선택되지 않았습니다.")
+
+    def open_source_folder(self):
+        video_path = self.fileInput.text()
+        if video_path and os.path.isfile(video_path):
+            open_source_file_dir(video_path)
+        else:
+            QMessageBox.warning(self, "경고", "올바른 원본 파일이 선택되지 않았습니다.")
+
+    def play_output_video(self):
+        out_dir = self.dirInput.text()
+        out_name = self.nameInput.text()
+        output_file = os.path.join(out_dir, out_name)
+        if output_file and os.path.isfile(output_file):
+            self.player_widget.load_video(output_file, auto_play=True)
+        else:
+            QMessageBox.warning(self, "경고", "편집 영상 파일이 존재하지 않습니다.")
+
+    def update_output_play_btn_state(self):
+        out_dir = self.dirInput.text()
+        out_name = self.nameInput.text()
+        if out_dir and out_name:
+            output_file = os.path.join(out_dir, out_name)
+            is_exist = os.path.isfile(output_file)
+        else:
+            is_exist = False
+        self.playOutBtn.setEnabled(is_exist)
+
+    def update_output_dir(self):
+        source_file = self.fileInput.text()
+        if self.radioSame.isChecked():
+            if source_file:
+                self.dirInput.setText(os.path.dirname(source_file).replace('\\', '/'))
+            else:
+                self.dirInput.setText("")
+        elif self.radioOutput.isChecked():
+            if source_file:
+                self.dirInput.setText(os.path.join(os.path.dirname(source_file), "output").replace('\\', '/'))
+            else:
+                self.dirInput.setText("")
+        elif self.radioCustom.isChecked():
+            if not self.dirInput.text():
+                self.dirInput.setText(self.get_active_working_dir().replace('\\', '/'))
+        self.update_output_play_btn_state()
+
+    def on_radio_changed(self):
+        is_custom = self.radioCustom.isChecked()
+        self.dirInput.setEnabled(is_custom)
+        self.dirBtn.setEnabled(is_custom)
+        
+        if is_custom:
+            self.dirInput.setText(self.get_active_working_dir().replace('\\', '/'))
+        else:
+            self.update_output_dir()
+        self.update_output_play_btn_state()
+
+    def on_history_combo_changed(self, index):
+        if self.is_loading_file:
+            return
+        if self.radioCustom.isChecked() and index >= 0:
+            self.dirInput.setText(self.historyCombo.currentText().replace('\\', '/'))
+
+    def check_end_time_focus(self):
+        start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
+        end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
+        if start_cs > end_cs:
+            self.endInput.setText(self.startInput.displayText())
+
+    def executeCutter(self):
+        video_in = self.fileInput.text()
+        start_time = self.startInput.displayText()
+        end_time = self.endInput.displayText()
+        out_name = self.nameInput.text().strip()
+        if not out_name.lower().endswith(".mp4"):
+            out_name += ".mp4"
+            self.nameInput.setText(out_name)
+        out_dir = self.dirInput.text()
+
+        if not video_in or not out_dir:
+            QMessageBox.warning(
+                self, "경고", "파일 경로 및 저장 위치를 모두 지정하십시오."
+            )
+            return
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        video_out = os.path.join(out_dir, out_name).replace('\\', '/')
+        if self.autoNumberCheck.isChecked():
+            video_out = get_unique_filename(video_out)
+            self.nameInput.setText(os.path.basename(video_out))
+
+        ffmpeg_bin = get_ffmpeg_path()
+
+        cmd = [
+            ffmpeg_bin,
+            "-ss",
+            start_time,
+            "-to",
+            end_time,
+            "-i",
+            video_in,
+        ]
+
+        if self.muteCheck.isChecked():
+            cmd.extend(["-c:v", "copy", "-an"])
+        else:
+            cmd.extend(["-c:v", "copy", "-c:a", "copy"])
+
+        if self.copyMetaCheck.isChecked():
+            cmd.append("-map_metadata")
+            cmd.append("0")
+            if self.original_creation_dt:
+                start_cs = self.startInput.time_to_centiseconds(start_time)
+                offset_secs = start_cs / 100.0
+                new_creation_dt = self.original_creation_dt + timedelta(seconds=offset_secs)
+                new_creation_str = new_creation_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                cmd.append("-metadata")
+                cmd.append(f"creation_time={new_creation_str}")
+        else:
+            cmd.append("-map_metadata")
+            cmd.append("-1")
+
+        cmd.extend(["-y", video_out])
+
+        try:
+            subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            QMessageBox.information(
+                self,
+                "완료",
+                f"분할 완료",
+            )
+            if self.create_history_flag:
+                self.add_task_history()
+            self.update_output_play_btn_state()
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "에러", f"FFmpeg 분할 실패:\n{e.stderr}")
+
+    def save_history(self, path):
+        path = path.replace('\\', '/')
+        history = []
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    history = [p.replace('\\', '/') for p in json.load(f)]
+            except:
+                pass
+        if path in history:
+            history.remove(path)
+        history.insert(0, path)
+        history = history[:5]
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+            self.refresh_history_combo(history)
+        except:
+            pass
+
+    def load_history(self):
+        history = []
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    history = [p.replace('\\', '/') for p in json.load(f)]
+            except:
+                pass
+        self.refresh_history_combo(history)
+
+    def refresh_history_combo(self, history):
+        self.historyCombo.clear()
+        
+        history = [p.replace('\\', '/') for p in history]
+        unique_history = []
+        for p in history:
+            if p not in unique_history:
+                unique_history.append(p)
+                
+        self.historyCombo.addItems(unique_history)
+        
+        default_normalized = self.default_dir.replace('\\', '/')
+        if default_normalized not in unique_history:
+            self.historyCombo.addItem(default_normalized)
+            
+        if self.historyCombo.count() > 0:
+            self.historyCombo.setCurrentIndex(0)
+
+    def load_task_history(self):
+        self.task_histories = []
+        if os.path.exists(self.task_history_file):
+            try:
+                with open(self.task_history_file, "r", encoding="utf-8") as f:
+                    self.task_histories = json.load(f)
+            except:
+                pass
+        self.refresh_task_history_combo()
+
+    def refresh_task_history_combo(self):
+        self.taskHistoryCombo.blockSignals(True)
+        self.taskHistoryCombo.clear()
+        self.taskHistoryCombo.addItem("작업 히스토리 선택...")
+        for task in self.task_histories:
+            self.taskHistoryCombo.addItem(task['name'])
+        self.taskHistoryCombo.blockSignals(False)
+
+    def on_task_history_selected(self, index):
+        if index <= 0:
+            return
+        task = self.task_histories[index - 1]
+        
+        self.is_loading_history = True
+        
+        self.fileInput.setText(task['video_in'])
+        self.startInput.setText(task['start_time'])
+        self.endInput.setText(task['end_time'])
+        self.nameInput.setText(task['out_name'])
+        self.muteCheck.setChecked(task['mute'])
+        self.copyMetaCheck.setChecked(task['copy_meta'])
+        self.autoNumberCheck.setChecked(task['auto_number'])
+        
+        radio_state = task.get('radio_state', 'custom')
+        if radio_state == 'same':
+            self.radioSame.setChecked(True)
+        elif radio_state == 'output':
+            self.radioOutput.setChecked(True)
+        else:
+            self.radioCustom.setChecked(True)
+            
+        self.dirInput.setText(task['out_dir'])
+        
+        self.create_history_flag = False
+        self.is_loading_history = False
+
+    def add_task_history(self):
+        video_in = self.fileInput.text()
+        start_time = self.startInput.displayText()
+        end_time = self.endInput.displayText()
+        out_name = self.nameInput.text()
+        out_dir = self.dirInput.text()
+        
+        if self.radioSame.isChecked():
+            radio_state = "same"
+        elif self.radioOutput.isChecked():
+            radio_state = "output"
+        else:
+            radio_state = "custom"
+            
+        base_video = os.path.basename(video_in)
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        history_name = f"{base_video}_{start_time}_{timestamp}"
+        
+        task = {
+            "name": history_name,
+            "video_in": video_in,
+            "start_time": start_time,
+            "end_time": end_time,
+            "out_name": out_name,
+            "mute": self.muteCheck.isChecked(),
+            "copy_meta": self.copyMetaCheck.isChecked(),
+            "auto_number": self.autoNumberCheck.isChecked(),
+            "out_dir": out_dir,
+            "radio_state": radio_state
+        }
+        
+        self.task_histories = [
+            t for t in self.task_histories 
+            if not (t['video_in'] == video_in and t['start_time'] == start_time and t['end_time'] == end_time and t['out_name'] == out_name and t['out_dir'] == out_dir)
+        ]
+        
+        self.task_histories.insert(0, task)
+        self.task_histories = self.task_histories[:50]
+        
+        try:
+            with open(self.task_history_file, "w", encoding="utf-8") as f:
+                json.dump(self.task_histories, f, ensure_ascii=False, indent=2)
+            self.refresh_task_history_combo()
+        except Exception as e:
+            print("Failed to save task history:", e)
+
+    def on_input_modified(self):
+        if not self.is_loading_history:
+            self.create_history_flag = True
+
+    def on_name_input_enter(self):
+        current_name = self.nameInput.text()
+        if not current_name:
+            return
+            
+        if self.last_enter_name and current_name == self.last_enter_name:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("확인")
+            msg_box.setText("무손실컷팅실행을 수행할까요?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+            msg_box.button(QMessageBox.StandardButton.Ok).setText("확인")
+            msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")
+            msg_box.button(QMessageBox.StandardButton.Ok).setFocus()
+            
+            result = msg_box.exec()
+            if result == QMessageBox.StandardButton.Ok:
+                self.executeCutter()
+            else:
+                self.nameInput.setFocus()
+        else:
+            self.last_enter_name = current_name
+            self.update_name_input_style()
+
+    def update_name_input_style(self):
+        current_name = self.nameInput.text()
+        if self.last_enter_name and current_name == self.last_enter_name:
+            self.nameInput.setStyleSheet("border: 1px solid red;")
+        else:
+            self.nameInput.setStyleSheet("")
+
+    def keyPressEvent(self, event: QKeyEvent):
+        focus_w = QApplication.focusWidget()
+        is_editing_text = isinstance(focus_w, QLineEdit)
+
+        key_str = event_to_key_str(event)
+        if not key_str:
+            super().keyPressEvent(event)
+            return
+
+        matched_action = None
+        for action_id, info in self.hotkeys.items():
+            p = info.get("primary", "")
+            s = info.get("secondary", "")
+            if (p and p.upper() == key_str.upper()) or (s and s.upper() == key_str.upper()):
+                matched_action = action_id
+                break
+
+        if not matched_action:
+            super().keyPressEvent(event)
+            return
+
+        if is_editing_text and matched_action not in ("exit_fullscreen", "toggle_fullscreen"):
+            super().keyPressEvent(event)
+            return
+
+        if matched_action == "toggle_option":
+            self.toggle_option_sidebar()
+        elif matched_action == "toggle_playlist":
+            self.toggle_playlist_sidebar()
+        elif matched_action == "play_pause":
+            self.player_widget.toggle_play()
+        elif matched_action == "step_1s_prev":
+            self.player_widget.step_time(-1000)
+        elif matched_action == "step_1s_next":
+            self.player_widget.step_time(1000)
+        elif matched_action == "step_5s_prev":
+            self.player_widget.step_time(-5000)
+        elif matched_action == "step_5s_next":
+            self.player_widget.step_time(5000)
+        elif matched_action == "step_frame_prev":
+            self.player_widget.step_frame(forward=False)
+        elif matched_action == "step_frame_next":
+            self.player_widget.step_frame(forward=True)
+        elif matched_action == "toggle_fullscreen":
+            self.player_widget.toggle_fullscreen()
+        elif matched_action == "exit_fullscreen":
+            if self.isFullScreen():
+                self.showNormal()
+        elif matched_action == "show_properties":
+            self.view_source_properties()
+        elif matched_action == "delete_playlist_item":
+            self.remove_selected_playlist_item()
+        else:
+            super().keyPressEvent(event)
