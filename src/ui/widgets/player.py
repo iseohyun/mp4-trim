@@ -188,6 +188,18 @@ class EmbeddedVideoPlayer(QWidget):
             pos = max(0, min(self.media_player.duration(), pos))
             self.media_player.setPosition(pos)
 
+    def unload_video(self):
+        self.media_player.stop()
+        self.media_player.setSource(QUrl())
+        self.has_video_loaded = False
+        self.video_info = None
+        self.video_path_cached = None
+        if hasattr(self, 'info_overlay') and self.info_overlay:
+            self.info_overlay.hide()
+        if hasattr(self, 'trimming_slider') and self.trimming_slider:
+            self.trimming_slider.set_duration(0)
+            self.trimming_slider.set_cut_history_regions([])
+
     def load_video(self, file_path: str, auto_play=True):
         if file_path and os.path.isfile(file_path):
             self.media_player.setSource(QUrl.fromLocalFile(file_path))

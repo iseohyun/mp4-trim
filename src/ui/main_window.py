@@ -79,6 +79,21 @@ class FocusOutFilter(QObject):
                 self.target_widget.setFocus()
 
 
+class CustomPlaylistListWidget(QListWidget):
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Delete:
+            main_win = self.window()
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                if hasattr(main_win, 'delete_selected_playlist_file_permanently'):
+                    main_win.delete_selected_playlist_file_permanently()
+                    return
+            else:
+                if hasattr(main_win, 'remove_selected_playlist_item'):
+                    main_win.remove_selected_playlist_item()
+                    return
+        super().keyPressEvent(event)
+
+
 class VideoCutterApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -342,7 +357,7 @@ class VideoCutterApp(QWidget):
         sb_header.addWidget(self.add_file_btn)
         sidebar_layout.addLayout(sb_header)
 
-        self.playlist_widget = QListWidget()
+        self.playlist_widget = CustomPlaylistListWidget()
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self.on_playlist_context_menu)
         self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_item_double_clicked)
@@ -605,13 +620,64 @@ class VideoCutterApp(QWidget):
         item = self.playlist_widget.currentItem()
         if item:
             file_path = item.data(Qt.ItemDataRole.UserRole)
+            if self.player_widget.video_path_cached == file_path or self.fileInput.text() == file_path:
+                self.player_widget.unload_video()
+                self.fileInput.setText("")
+            
             row = self.playlist_widget.row(item)
             self.playlist_widget.takeItem(row)
             if file_path in self.playlist_files:
                 self.playlist_files.remove(file_path)
                 self.save_playlist_history()
+            self.refresh_playlist_colors()
+
+    def delete_selected_playlist_file_permanently(self):
+        item = self.playlist_widget.currentItem()
+        if not item:
+            return
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        if not file_path:
+            return
+            
+        file_name = os.path.basename(file_path)
+        
+        res = QMessageBox.question(
+            self,
+            "파일 물리 삭제 확인",
+            f"'{file_name}' 파일을 디스크에서 완전히 삭제하시겠습니까?\n\n경로: {file_path}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+
+        # 1. 미디어 플레이어가 해당 파일을 사용 중이면 소유권/핸들 해제
+        if self.player_widget.video_path_cached == file_path or self.fileInput.text() == file_path:
+            self.player_widget.unload_video()
+            self.fileInput.setText("")
+
+        # 2. 재생목록에서 제거
+        row = self.playlist_widget.row(item)
+        self.playlist_widget.takeItem(row)
+        if file_path in self.playlist_files:
+            self.playlist_files.remove(file_path)
+            self.save_playlist_history()
+        self.refresh_playlist_colors()
+
+        # 3. 디스크에서 실제 파일 삭제
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                self.show_toast(f"'{file_name}' 파일이 물리적으로 삭제되었습니다.")
+            except Exception as e:
+                QMessageBox.critical(self, "삭제 실패", f"파일을 삭제하지 못했습니다:\n{e}")
+        else:
+            self.show_toast(f"'{file_name}' 목록에서 제거되었습니다.")
 
     def clear_playlist(self):
+        if self.player_widget.has_video_loaded:
+            self.player_widget.unload_video()
+            self.fileInput.setText("")
         self.playlist_widget.clear()
         self.playlist_files.clear()
         self.save_playlist_history()
@@ -638,10 +704,14 @@ class VideoCutterApp(QWidget):
             remove_act = QAction("목록에서 제거 (Del)", menu)
             remove_act.triggered.connect(self.remove_selected_playlist_item)
 
+            delete_file_act = QAction("파일 물리 삭제 (Ctrl+Del)", menu)
+            delete_file_act.triggered.connect(self.delete_selected_playlist_file_permanently)
+
             menu.addAction(open_folder_act)
             menu.addAction(props_act)
             menu.addSeparator()
             menu.addAction(remove_act)
+            menu.addAction(delete_file_act)
 
         clear_all_act = QAction("전체 목록 비우기", menu)
         clear_all_act.triggered.connect(self.clear_playlist)
