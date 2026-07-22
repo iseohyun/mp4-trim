@@ -229,6 +229,7 @@ class EmbeddedVideoPlayer(QWidget):
             self.thumb_thread = ThumbnailGeneratorThread(file_path, count=10, parent=self)
             self.thumb_thread.thumbnails_ready.connect(self.trimming_slider.set_thumbnail_files)
             self.thumb_thread.start()
+            self.setFocus()
 
     def toggle_play(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -236,6 +237,7 @@ class EmbeddedVideoPlayer(QWidget):
         else:
             self.media_player.play()
         self.show_overlay()
+        self.setFocus()
 
     def on_playback_state_changed(self, state):
         if state == QMediaPlayer.PlaybackState.PlayingState:
@@ -243,6 +245,7 @@ class EmbeddedVideoPlayer(QWidget):
         else:
             self.center_play_btn.setText("▶")
             self.overlay.show()
+        self.setFocus()
 
     def set_position(self, position):
         self.media_player.setPosition(position)
@@ -264,6 +267,7 @@ class EmbeddedVideoPlayer(QWidget):
                 w.showNormal()
             else:
                 w.showFullScreen()
+        self.setFocus()
 
     def update_hud(self):
         from src.core.metadata import is_caps_lock_on

@@ -229,6 +229,45 @@ class TrimmingSliderWidget(QWidget):
         ex = self.ms_to_x(self.end_ms)
         px = self.ms_to_x(self.position_ms)
 
+        # 0.2. 상단 시간 보조선 (자 디자인: 1초-짧은선, 5초-중간선, 10초-긴선 + 시간표시)
+        if self.duration_ms > 0:
+            dur_sec = int(self.duration_ms / 1000)
+            px_per_sec = w / float(max(1, dur_sec))
+            
+            step_sec = 1
+            if px_per_sec < 3.0:
+                step_sec = 5
+            if px_per_sec < 1.0:
+                step_sec = 10
+
+            font = painter.font()
+            font.setPointSize(7)
+            font.setBold(False)
+            painter.setFont(font)
+
+            for s in range(0, dur_sec + 1, step_sec):
+                tx = self.ms_to_x(s * 1000)
+                if tx < 0 or tx > w:
+                    continue
+
+                if s % 10 == 0:
+                    # 10초 마다: 긴 선 (12px) + 시간 텍스트
+                    painter.setPen(QPen(QColor(255, 255, 255, 220), 1.5))
+                    painter.drawLine(int(tx), 0, int(tx), 12)
+                    
+                    time_str = f"{s//60:02d}:{s%60:02d}"
+                    if tx + 35 < w and (px_per_sec >= 1.5 or s % 30 == 0):
+                        painter.setPen(QColor(255, 255, 255, 190))
+                        painter.drawText(QRectF(tx + 2, 0, 32, 12), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time_str)
+                elif s % 5 == 0:
+                    # 5초 마다: 중간 선 (8px)
+                    painter.setPen(QPen(QColor(255, 255, 255, 170), 1))
+                    painter.drawLine(int(tx), 0, int(tx), 8)
+                else:
+                    # 1초 마다: 짧은 선 (4px)
+                    painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
+                    painter.drawLine(int(tx), 0, int(tx), 4)
+
         # 0.5. 컷팅 히스토리 구간 하이라이트 (하위 40% 영역만 밝게 표시, 상단 60%에는 영상제목)
         if self.cut_history_regions and self.duration_ms > 0:
             for region in self.cut_history_regions:
@@ -357,6 +396,9 @@ class TrimmingSliderWidget(QWidget):
             self.setCursor(Qt.CursorShape.SizeHorCursor)
         else:
             self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setFocus()
+        if self.parent() and hasattr(self.parent(), 'setFocus'):
+            self.parent().setFocus()
         self.update()
 
     def leaveEvent(self, event):

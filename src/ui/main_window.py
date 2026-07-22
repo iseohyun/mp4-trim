@@ -731,6 +731,7 @@ class VideoCutterApp(QWidget):
         if file_path and os.path.isfile(file_path):
             self.fileInput.setText(file_path)
             self.player_widget.load_video(file_path, auto_play=True)
+            self.player_widget.setFocus()
 
     def on_playlist_context_menu(self, pos):
         item = self.playlist_widget.itemAt(pos)
@@ -901,14 +902,18 @@ class VideoCutterApp(QWidget):
             QMessageBox.warning(self, "경고", "편집 영상 파일이 존재하지 않습니다.")
 
     def update_output_play_btn_state(self):
-        out_dir = self.dirInput.text()
-        out_name = self.nameInput.text()
-        if out_dir and out_name:
-            output_file = os.path.join(out_dir, out_name)
-            is_exist = os.path.isfile(output_file)
+        if self.playOutBtn.text() == "재생":
+            out_dir = self.dirInput.text()
+            out_name = self.nameInput.text()
+            if out_dir and out_name:
+                output_file = os.path.join(out_dir, out_name)
+                is_exist = os.path.isfile(output_file)
+            else:
+                is_exist = False
+            self.playOutBtn.setEnabled(is_exist)
         else:
-            is_exist = False
-        self.playOutBtn.setEnabled(is_exist)
+            has_input = bool(self.fileInput.text().strip() and os.path.isfile(self.fileInput.text().strip()))
+            self.playOutBtn.setEnabled(has_input)
 
     def update_output_dir(self):
         source_file = self.fileInput.text()
@@ -1151,21 +1156,26 @@ class VideoCutterApp(QWidget):
         # 2. 작업 히스토리의 시작/종료 범위로 start & end 설정
         start_str = task.get('start_time', '00:00:00.00')
         end_str = task.get('end_time', '00:00:00.00')
-        self.startInput.setText(start_str)
-        self.endInput.setText(end_str)
+        self.startInput.setText(''.join(c for c in start_str if c.isdigit()))
+        self.endInput.setText(''.join(c for c in end_str if c.isdigit()))
         
         # 3. 타임라인 슬라이더의 [Start, End] 마커 및 재생 헤드 위치 동기화
-        start_cs = self.startInput.time_to_centiseconds(start_str)
-        end_cs = self.endInput.time_to_centiseconds(end_str)
+        start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
+        end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
         start_ms = start_cs * 10
         end_ms = end_cs * 10
         
-        if hasattr(self.player_widget, 'trimming_slider'):
-            self.player_widget.trimming_slider.set_start_ms(start_ms)
-            self.player_widget.trimming_slider.set_end_ms(end_ms)
-            self.player_widget.trimming_slider.set_position(start_ms)
-        if hasattr(self.player_widget, 'media_player'):
-            self.player_widget.media_player.setPosition(start_ms)
+        def apply_trim_bounds():
+            if hasattr(self.player_widget, 'trimming_slider'):
+                self.player_widget.trimming_slider.set_end_ms(end_ms)
+                self.player_widget.trimming_slider.set_start_ms(start_ms)
+                self.player_widget.trimming_slider.set_position(start_ms)
+            if hasattr(self.player_widget, 'media_player'):
+                self.player_widget.media_player.setPosition(start_ms)
+
+        apply_trim_bounds()
+        QTimer.singleShot(100, apply_trim_bounds)
+        QTimer.singleShot(350, apply_trim_bounds)
 
         raw_out_name = task.get('out_name', '')
         if raw_out_name.lower().endswith(".mp4"):
@@ -1189,6 +1199,9 @@ class VideoCutterApp(QWidget):
         self.create_history_flag = False
         self.is_loading_history = False
         self.update_timeline_cut_highlights()
+        self.update_output_play_btn_state()
+        if hasattr(self, 'player_widget') and self.player_widget:
+            self.player_widget.setFocus()
 
     def add_task_history(self):
         video_in = self.fileInput.text().strip()
