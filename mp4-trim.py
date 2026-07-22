@@ -10,20 +10,26 @@ from src.ui.main_window import VideoCutterApp
 
 setup_logging()
 
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(APP_DIR, relative_path)
+
 def main():
     try:
         try:
-            myappid = "mycompany.mp4trimmer.cutter.1.0"
+            myappid = "iseohyun.mp4trim.cutter.1.0"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception as e:
             logging.warning(f"Failed to set AppUserModelID: {e}")
 
         app = QApplication(sys.argv)
-        ex = VideoCutterApp()
+        
+        icon_path = get_resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
 
-        icon_path = os.path.join(APP_DIR, "dist", "icon.ico")
-        if not os.path.exists(icon_path):
-            icon_path = os.path.join(APP_DIR, "icon.ico")
+        ex = VideoCutterApp()
         if os.path.exists(icon_path):
             ex.setWindowIcon(QIcon(icon_path))
 

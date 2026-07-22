@@ -20,11 +20,11 @@ if "%BUILD_TYPE%"=="2" (
         pause
         exit /b 1
     )
-    python -m PyInstaller --noupx --onefile --noconsole --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtMultimedia --hidden-import PyQt6.QtMultimediaWidgets --add-binary "ffmpeg.exe;." --icon="icon.ico" mp4-trim.py
+    python -m PyInstaller --noupx --onefile --noconsole --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtMultimedia --hidden-import PyQt6.QtMultimediaWidgets --add-binary "ffmpeg.exe;." --add-data "icon.ico;." --icon="icon.ico" mp4-trim.py
 ) else (
     echo.
     echo [경량화 빌드] ffmpeg.exe 미포함 빌드를 시작합니다...
-    python -m PyInstaller --noupx --onefile --noconsole --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtMultimedia --hidden-import PyQt6.QtMultimediaWidgets --icon="icon.ico" mp4-trim.py
+    python -m PyInstaller --noupx --onefile --noconsole --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --hidden-import PyQt6.QtMultimedia --hidden-import PyQt6.QtMultimediaWidgets --add-data "icon.ico;." --icon="icon.ico" mp4-trim.py
 )
 
 echo.

@@ -147,6 +147,7 @@ class TrimmingSliderWidget(QWidget):
 
         self.active_marker = None     # 'start', 'end', 'playhead'
         self.dragging_marker = None
+        self.cut_history_regions = []
 
     def set_thumbnail_files(self, paths):
         pixmaps = []
@@ -172,6 +173,10 @@ class TrimmingSliderWidget(QWidget):
 
     def set_position(self, pos_ms: int):
         self.position_ms = max(0, min(self.duration_ms, pos_ms))
+        self.update()
+
+    def set_cut_history_regions(self, regions: list):
+        self.cut_history_regions = regions
         self.update()
 
     def set_start_ms(self, start_ms: int):
@@ -223,6 +228,31 @@ class TrimmingSliderWidget(QWidget):
         sx = self.ms_to_x(self.start_ms)
         ex = self.ms_to_x(self.end_ms)
         px = self.ms_to_x(self.position_ms)
+
+        # 0.5. 컷팅 히스토리 구간 하이라이트 (하위 40% 영역만 밝게 표시, 상단 60%에는 영상제목)
+        if self.cut_history_regions and self.duration_ms > 0:
+            for region in self.cut_history_regions:
+                r_start = region.get('start_ms', 0)
+                r_end = region.get('end_ms', 0)
+                r_name = region.get('name', '')
+                
+                rx1 = self.ms_to_x(r_start)
+                rx2 = self.ms_to_x(r_end)
+                rw = max(3.0, rx2 - rx1)
+                
+                # 하위 40% 영역 밝게 하이라이트
+                highlight_rect = QRectF(rx1, h * 0.6, rw, h * 0.4)
+                painter.fillRect(highlight_rect, QColor(255, 235, 59, 220))
+                
+                # 상단 60% 영역 컷팅 제목 라벨 노출
+                if r_name and rw > 15:
+                    label_rect = QRectF(rx1, 0, rw, h * 0.6)
+                    painter.setPen(QColor(255, 255, 255, 240))
+                    font = painter.font()
+                    font.setPointSize(9)
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.TextSingleLine, r_name)
 
         # 1. 선택 영역 밖 (0 ~ start_ms, end_ms ~ duration_ms) 반투명 블랙 딤(Dim) 처리
         dim_color = QColor(0, 0, 0, 160)

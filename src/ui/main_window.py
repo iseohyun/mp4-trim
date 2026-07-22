@@ -172,16 +172,15 @@ class VideoCutterApp(QWidget):
         opt_header.addWidget(self.hotkey_btn, 0)
         opt_layout.addLayout(opt_header)
 
-        # 1-1. 저장 파일명
+        # 1-1. 저장 파일명 (.mp4 생략 표시)
         name_box = QHBoxLayout()
-        self.nameInput = QLineEdit("output.mp4")
-        self.nameInput.textChanged.connect(self.update_output_play_btn_state)
+        self.nameInput = QLineEdit("output")
+        self.nameInput.textChanged.connect(self.on_input_modified)
         self.nameInput.returnPressed.connect(self.on_name_input_enter)
         self.nameInput.textChanged.connect(self.update_name_input_style)
-        self.playOutBtn = QPushButton("재생")
-        self.playOutBtn.setToolTip("편집영상 재생하기")
-        self.playOutBtn.setEnabled(False)
-        self.playOutBtn.clicked.connect(self.play_output_video)
+        self.playOutBtn = QPushButton("컷팅")
+        self.playOutBtn.setToolTip("무손실 컷팅 실행 / 저장 영상 재생")
+        self.playOutBtn.clicked.connect(self.on_cut_or_play_clicked)
         name_box.addWidget(self.nameInput, 1)
         name_box.addWidget(self.playOutBtn, 0)
 
@@ -193,7 +192,7 @@ class VideoCutterApp(QWidget):
         self.copyMetaCheck = QCheckBox("속성 복사")
         self.copyMetaCheck.setChecked(True)
         self.autoNumberCheck = QCheckBox("자동 넘버링")
-        self.autoNumberCheck.setChecked(True)
+        self.autoNumberCheck.setChecked(False)  # default: unchecked
         self.hudCheck = QCheckBox("동영상 정보 HUD 표시")
         self.hudCheck.toggled.connect(self.on_hud_check_toggled)
         opt_layout.addWidget(self.muteCheck)
@@ -216,7 +215,7 @@ class VideoCutterApp(QWidget):
 
         dir_box = QHBoxLayout()
         self.dirInput = QLineEdit()
-        self.dirInput.textChanged.connect(self.update_output_play_btn_state)
+        self.dirInput.textChanged.connect(self.on_input_modified)
         self.dirBtn = QPushButton("선택")
         self.dirBtn.clicked.connect(self.openDirDialog)
         dir_box.addWidget(self.dirInput, 1)
@@ -224,15 +223,33 @@ class VideoCutterApp(QWidget):
         opt_layout.addWidget(QLabel("저장 경로"))
         opt_layout.addLayout(dir_box)
 
-        # 1-4. 작업 히스토리 및 최근 작업 폴더
+        # 1-4. 작업 히스토리 및 최근 작업 폴더 (글씨 흰색 스타일 적용)
+        combo_style = """
+            QComboBox {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                border: 1px solid #333;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                selection-background-color: #0078d7;
+                selection-color: white;
+            }
+        """
+
         opt_layout.addWidget(QLabel("작업 히스토리"))
         self.taskHistoryCombo = QComboBox()
+        self.taskHistoryCombo.setStyleSheet(combo_style)
         self.taskHistoryCombo.currentIndexChanged.connect(self.on_task_history_selected)
         opt_layout.addWidget(self.taskHistoryCombo)
 
         opt_layout.addWidget(QLabel("최근 작업 폴더"))
         hist_box = QHBoxLayout()
         self.historyCombo = QComboBox()
+        self.historyCombo.setStyleSheet(combo_style)
         self.historyCombo.currentIndexChanged.connect(self.on_history_combo_changed)
         self.openDirBtn = QPushButton("열기")
         self.openDirBtn.clicked.connect(self.open_current_directory)
@@ -241,12 +258,6 @@ class VideoCutterApp(QWidget):
         opt_layout.addLayout(hist_box)
 
         opt_layout.addStretch()
-
-        # 1-5. 무손실 컷팅 실행 버튼
-        self.runBtn = QPushButton("무손실 컷팅 실행")
-        self.runBtn.setStyleSheet("font-weight: bold; background-color: #2b579a; color: white; padding: 10px; border-radius: 4px;")
-        self.runBtn.clicked.connect(self.executeCutter)
-        opt_layout.addWidget(self.runBtn)
 
         # Page 1: 단축키 설정 페이지
         opt_hotkey_page = self.build_hotkey_settings_page()
@@ -566,6 +577,8 @@ class VideoCutterApp(QWidget):
             if save_history:
                 self.save_playlist_history()
 
+            self.refresh_playlist_colors()
+
             if load_immediately:
                 self.fileInput.setText(file_path)
 
@@ -664,7 +677,14 @@ class VideoCutterApp(QWidget):
                     end_cs = duration_cs
                     
                     self.startInput.setText(self.startInput.centiseconds_to_time(start_cs))
-                    self.endInput.setText(self.endInput.centiseconds_to_time(end_cs))
+                    base_name = os.path.basename(text)
+                    if base_name.lower().endswith(".mp4"):
+                        base_name = base_name[:-4]
+                    if not self.nameInput.text() or self.nameInput.text() == "output":
+                        self.nameInput.setText(base_name)
+
+                    self.check_target_file_exists()
+                    self.update_timeline_cut_highlights()
                 except Exception as e:
                     import traceback
                     error_msg = traceback.format_exc()
@@ -797,15 +817,64 @@ class VideoCutterApp(QWidget):
         if start_cs > end_cs:
             self.endInput.setText(self.startInput.displayText())
 
+    def get_clean_output_name(self) -> str:
+        txt = self.nameInput.text().strip()
+        if txt.lower().endswith(".mp4"):
+            txt = txt[:-4].strip()
+        return txt if txt else "output"
+
+    def get_full_output_path(self) -> str:
+        out_dir = self.dirInput.text().strip()
+        clean_name = self.get_clean_output_name()
+        return os.path.join(out_dir, clean_name + ".mp4").replace('\\', '/')
+
+    def check_target_file_exists(self):
+        if hasattr(self, 'is_loading_history') and self.is_loading_history:
+            return
+        full_path = self.get_full_output_path()
+        if full_path and os.path.exists(full_path):
+            self.autoNumberCheck.blockSignals(True)
+            self.autoNumberCheck.setChecked(True)
+            self.autoNumberCheck.blockSignals(False)
+
+    def show_toast(self, message: str):
+        if not hasattr(self, 'toast_label') or self.toast_label is None:
+            self.toast_label = QLabel(self)
+            self.toast_label.setStyleSheet("""
+                QLabel {
+                    background-color: rgba(30, 100, 200, 0.95);
+                    color: #ffffff;
+                    font-weight: bold;
+                    font-size: 12px;
+                    padding: 8px 16px;
+                    border-radius: 6px;
+                    border: 1px solid rgba(255, 255, 255, 0.4);
+                }
+            """)
+            self.toast_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.toast_label.hide()
+        
+        self.toast_label.setText(message)
+        self.toast_label.adjustSize()
+        self.toast_label.move(max(10, self.width() - self.toast_label.width() - 20), 20)
+        self.toast_label.show()
+        self.toast_label.raise_()
+        
+        QTimer.singleShot(1000, lambda: self.toast_label.hide() if hasattr(self, 'toast_label') and self.toast_label else None)
+
+    def on_cut_or_play_clicked(self):
+        if self.playOutBtn.text() == "재생":
+            self.play_output_video()
+        else:
+            self.executeCutter()
+
     def executeCutter(self):
         video_in = self.fileInput.text()
         start_time = self.startInput.displayText()
         end_time = self.endInput.displayText()
-        out_name = self.nameInput.text().strip()
-        if not out_name.lower().endswith(".mp4"):
-            out_name += ".mp4"
-            self.nameInput.setText(out_name)
-        out_dir = self.dirInput.text()
+        clean_name = self.get_clean_output_name()
+        out_name = clean_name + ".mp4"
+        out_dir = self.dirInput.text().strip()
 
         if not video_in or not out_dir:
             QMessageBox.warning(
@@ -813,20 +882,17 @@ class VideoCutterApp(QWidget):
             )
             return
 
-        # 자르기 수행 전 물어보기
-        res = QMessageBox.question(
-            self, "확인", "무손실 컷팅을 실행하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if res != QMessageBox.StandardButton.Yes:
-            return
-
         os.makedirs(out_dir, exist_ok=True)
 
         video_out = os.path.join(out_dir, out_name).replace('\\', '/')
         if self.autoNumberCheck.isChecked():
             video_out = get_unique_filename(video_out)
-            self.nameInput.setText(os.path.basename(video_out))
+            final_name = os.path.basename(video_out)
+            if final_name.lower().endswith(".mp4"):
+                final_name = final_name[:-4]
+            self.nameInput.blockSignals(True)
+            self.nameInput.setText(final_name)
+            self.nameInput.blockSignals(False)
 
         ffmpeg_bin = get_ffmpeg_path()
 
@@ -871,12 +937,18 @@ class VideoCutterApp(QWidget):
                 check=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            # 팝업 X -> 대신 재생 버튼이 붉은색으로 변경됨
+            out_filename = os.path.basename(video_out)
+            self.show_toast(f"'{out_filename}' (으)로 저장되었습니다.")
+
+            self.playOutBtn.setText("재생")
             self.playOutBtn.setStyleSheet("background-color: #ff3b30; color: white; font-weight: bold;")
+            self.playOutBtn.setEnabled(True)
             
             if self.create_history_flag:
                 self.add_task_history()
-            self.update_output_play_btn_state()
+
+            self.refresh_playlist_colors()
+            self.update_timeline_cut_highlights()
         except subprocess.CalledProcessError as e:
             QMessageBox.critical(self, "에러", f"FFmpeg 분할 실패:\n{e.stderr}")
 
@@ -937,6 +1009,8 @@ class VideoCutterApp(QWidget):
             except:
                 pass
         self.refresh_task_history_combo()
+        self.refresh_playlist_colors()
+        self.update_timeline_cut_highlights()
 
     def refresh_task_history_combo(self):
         self.taskHistoryCombo.blockSignals(True)
@@ -1017,8 +1091,48 @@ class VideoCutterApp(QWidget):
             with open(self.task_history_file, "w", encoding="utf-8") as f:
                 json.dump(self.task_histories, f, ensure_ascii=False, indent=2)
             self.refresh_task_history_combo()
+            self.refresh_playlist_colors()
+            self.update_timeline_cut_highlights()
         except Exception as e:
             print("Failed to save task history:", e)
+
+    def refresh_playlist_colors(self):
+        for i in range(self.playlist_widget.count()):
+            item = self.playlist_widget.item(i)
+            v_path = item.data(Qt.ItemDataRole.UserRole)
+            cut_count = sum(1 for t in self.task_histories if t.get('video_in') == v_path)
+            if cut_count >= 3:
+                # 3개 이상: 선명한 파스텔 노랑
+                item.setBackground(QColor("#544c10"))
+                item.setForeground(QColor("#ffff00"))
+            elif cut_count >= 1:
+                # 1~2개: 연한 파스텔 노랑
+                item.setBackground(QColor("#3d391c"))
+                item.setForeground(QColor("#fff59d"))
+            else:
+                item.setBackground(QColor("#1e1e1e"))
+                item.setForeground(QColor("#dcdcdc"))
+
+    def update_timeline_cut_highlights(self):
+        cur_file = self.fileInput.text().strip()
+        if not cur_file or not hasattr(self.player_widget, 'trimming_slider'):
+            return
+        
+        regions = []
+        for t in self.task_histories:
+            if t.get('video_in') == cur_file:
+                try:
+                    s_cs = self.startInput.time_to_centiseconds(t.get('start_time', '00:00:00.00'))
+                    e_cs = self.endInput.time_to_centiseconds(t.get('end_time', '00:00:00.00'))
+                    name = t.get('out_name', '')
+                    regions.append({
+                        'start_ms': s_cs * 10,
+                        'end_ms': e_cs * 10,
+                        'name': name
+                    })
+                except:
+                    pass
+        self.player_widget.trimming_slider.set_cut_history_regions(regions)
 
     def on_hud_check_toggled(self, checked):
         self.player_widget.force_hud_visible = checked
@@ -1027,31 +1141,13 @@ class VideoCutterApp(QWidget):
     def on_input_modified(self):
         if not self.is_loading_history:
             self.create_history_flag = True
+        self.playOutBtn.setText("컷팅")
         self.playOutBtn.setStyleSheet("")
+        self.check_target_file_exists()
+        self.update_timeline_cut_highlights()
 
     def on_name_input_enter(self):
-        current_name = self.nameInput.text()
-        if not current_name:
-            return
-            
-        if self.last_enter_name and current_name == self.last_enter_name:
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("확인")
-            msg_box.setText("무손실컷팅실행을 수행할까요?")
-            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-            msg_box.setDefaultButton(QMessageBox.StandardButton.Ok)
-            msg_box.button(QMessageBox.StandardButton.Ok).setText("확인")
-            msg_box.button(QMessageBox.StandardButton.Cancel).setText("취소")
-            msg_box.button(QMessageBox.StandardButton.Ok).setFocus()
-            
-            result = msg_box.exec()
-            if result == QMessageBox.StandardButton.Ok:
-                self.executeCutter()
-            else:
-                self.nameInput.setFocus()
-        else:
-            self.last_enter_name = current_name
-            self.update_name_input_style()
+        self.executeCutter()
 
     def update_name_input_style(self):
         current_name = self.nameInput.text()
