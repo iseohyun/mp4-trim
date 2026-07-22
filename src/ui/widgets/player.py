@@ -1,4 +1,5 @@
 import os
+import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy
 )
@@ -91,6 +92,31 @@ class EmbeddedVideoPlayer(QWidget):
 
         self.drag_start_pos = None
 
+        # 동영상 정보 반투명 노란색 오버레이 HUD
+        self.info_overlay = QLabel(self.video_widget)
+        self.info_overlay.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 0, 0, 0.65);
+                color: #ffeb3b;  /* 노란색 */
+                border-radius: 4px;
+                padding: 8px;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+                border: 1px solid rgba(255, 235, 59, 0.2);
+            }
+        """)
+        self.info_overlay.hide()
+
+        self.video_info = None
+        self.has_video_loaded = False
+        self.video_path_cached = ""
+
+        # Caps Lock 감지 및 HUD 갱신 타이머 (100ms)
+        self.hud_timer = QTimer(self)
+        self.hud_timer.setInterval(100)
+        self.hud_timer.timeout.connect(self.update_hud)
+        self.hud_timer.start()
+
     def update_video_aspect(self):
         pass
 
@@ -101,6 +127,8 @@ class EmbeddedVideoPlayer(QWidget):
         ov_h = 100
         self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
         self.overlay.raise_()
+        self.info_overlay.move(10, 10)
+        self.info_overlay.raise_()
 
     def mouseMoveEvent(self, event):
         self.show_overlay()
@@ -152,7 +180,20 @@ class EmbeddedVideoPlayer(QWidget):
             self.media_player.setSource(QUrl.fromLocalFile(file_path))
             if auto_play:
                 self.media_player.play()
+            else:
+                self.media_player.setPosition(0)
+                self.media_player.pause()
             self.show_overlay()
+
+            from src.core.metadata import get_detailed_video_info
+            try:
+                self.video_info = get_detailed_video_info(file_path)
+                self.has_video_loaded = True
+                self.video_path_cached = file_path
+            except Exception as e:
+                logging.error(f"Failed to load video properties: {e}")
+                self.video_info = None
+                self.has_video_loaded = False
 
             # 썸네일 필름스트립 스레드 시작
             if hasattr(self, 'thumb_thread') and self.thumb_thread and self.thumb_thread.isRunning():
@@ -198,3 +239,46 @@ class EmbeddedVideoPlayer(QWidget):
                 w.showNormal()
             else:
                 w.showFullScreen()
+
+    def update_hud(self):
+        from src.core.metadata import is_caps_lock_on
+        if is_caps_lock_on() and self.has_video_loaded and self.video_info:
+            pos_ms = self.media_player.position()
+            fps = self.video_info.get("fps", 0.0)
+            
+            # 현재 초 + 프레임 계산
+            if fps > 0:
+                sec_part = (pos_ms % 1000) / 1000.0
+                frame_idx = int(round(sec_part * fps))
+                frame_str = f"+ {frame_idx:02d}f"
+            else:
+                frame_str = ""
+
+            time_str = ms_to_time_str(pos_ms)
+            
+            # 주요 메타데이터 파싱 (너무 길지 않게 최대 5개 추출)
+            meta_lines = []
+            for k, v in self.video_info.get("metadata", {}).items():
+                if len(meta_lines) >= 5:
+                    break
+                meta_lines.append(f"{k}: {v}")
+            meta_str = "\n  ".join(meta_lines) if meta_lines else "None"
+
+            text = (
+                f"[ 동영상 상세 정보 ]\n"
+                f"• 파일명: {os.path.basename(self.video_path_cached)}\n"
+                f"• 해상도: {self.video_info['width']}x{self.video_info['height']} ({self.video_info['nickname']})\n"
+                f"• 비율: {self.video_info['aspect_ratio']}\n"
+                f"• 프레임: {self.video_info['fps']:.2f} fps\n"
+                f"• 총길이: {self.video_info['duration']}\n"
+                f"• 현재시각: {time_str} {frame_str}\n"
+                f"• 데이터레이트: {self.video_info['bitrate']}\n"
+                f"• 비트심도: {self.video_info['bit_depth']} ({self.video_info['pix_fmt']})\n"
+                f"• 메타데이터:\n  {meta_str}"
+            )
+            self.info_overlay.setText(text)
+            self.info_overlay.adjustSize()
+            self.info_overlay.show()
+            self.info_overlay.raise_()
+        else:
+            self.info_overlay.hide()

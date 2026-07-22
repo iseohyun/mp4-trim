@@ -294,6 +294,13 @@ class TrimmingSliderWidget(QWidget):
                     self.parent().media_player.pause()
             self.setCursor(Qt.CursorShape.SizeHorCursor)
             new_ms = self.x_to_ms(x)
+            
+            # Ctrl 눌려있을 때 빨간 세로선(현재 재생 시점)으로 자석 스냅 기능
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                if self.dragging_marker in ('start', 'end'):
+                    if abs(x - px) <= 12:
+                        new_ms = self.position_ms
+
             if self.dragging_marker == 'start':
                 self.start_ms = max(0, min(self.end_ms, new_ms))
                 self.start_changed.emit(self.start_ms)

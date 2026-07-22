@@ -140,3 +140,102 @@ def get_media_creation_time_and_duration(video_path: str):
             creation_dt = datetime.now()
             
     return duration_cs, creation_dt
+
+def is_caps_lock_on() -> bool:
+    try:
+        return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
+    except:
+        return False
+
+def get_detailed_video_info(video_path: str) -> dict:
+    ffmpeg_bin = get_ffmpeg_path()
+    cmd = [ffmpeg_bin, "-i", video_path]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", creationflags=subprocess.CREATE_NO_WINDOW)
+    output = res.stderr
+
+    info = {
+        "width": 0,
+        "height": 0,
+        "nickname": "Unknown",
+        "aspect_ratio": "Unknown",
+        "fps": 0.0,
+        "duration": "00:00:00.00",
+        "bitrate": "Unknown",
+        "pix_fmt": "Unknown",
+        "bit_depth": "8-bit",
+        "metadata": {}
+    }
+
+    # 1. Parse duration & overall bitrate
+    duration_match = re.search(r"Duration:\s*(\d+:\d+:\d+(?:\.\d+)?)", output)
+    if duration_match:
+        info["duration"] = duration_match.group(1)
+    
+    bitrate_match = re.search(r"Duration:.*bitrate:\s*(\d+\s*kb/s)", output, re.IGNORECASE)
+    if bitrate_match:
+        info["bitrate"] = bitrate_match.group(1)
+
+    # 2. Parse Video Stream details
+    video_stream_match = re.search(r"Stream #\d+:\d+.*Video:.*", output)
+    if video_stream_match:
+        line = video_stream_match.group(0)
+        
+        # Resolution
+        res_match = re.search(r"(\d{3,4})x(\d{3,4})", line)
+        if res_match:
+            w = int(res_match.group(1))
+            h = int(res_match.group(2))
+            info["width"] = w
+            info["height"] = h
+            
+            # Nickname mapping
+            if w >= 3840 or h >= 2160:
+                info["nickname"] = "UHD (4K)"
+            elif w >= 2560 or h >= 1440:
+                info["nickname"] = "QHD (2K)"
+            elif w >= 1920 or h >= 1080:
+                info["nickname"] = "FHD (1080p)"
+            elif w >= 1280 or h >= 720:
+                info["nickname"] = "HD (720p)"
+            else:
+                info["nickname"] = "SD"
+
+        dar_match = re.search(r"DAR\s+(\d+:\d+)", line)
+        if dar_match:
+            info["aspect_ratio"] = dar_match.group(1)
+        else:
+            if info["width"] and info["height"]:
+                from math import gcd
+                g = gcd(info["width"], info["height"])
+                info["aspect_ratio"] = f"{info['width']//g}:{info['height']//g}"
+
+        # Frame rate
+        fps_match = re.search(r"(\d+(?:\.\d+)?)\s*fps", line)
+        if fps_match:
+            info["fps"] = float(fps_match.group(1))
+
+        # pix_fmt / bit_depth
+        pix_fmt_match = re.search(r"Video:[^,]+,\s*([a-zA-Z0-9_()]+)", line)
+        if pix_fmt_match:
+            fmt = pix_fmt_match.group(1)
+            info["pix_fmt"] = fmt
+            if "10" in fmt:
+                info["bit_depth"] = "10-bit"
+            elif "12" in fmt:
+                info["bit_depth"] = "12-bit"
+            else:
+                info["bit_depth"] = "8-bit"
+
+    # 3. Parse Metadata tags (under the first Metadata:)
+    metadata_block_match = re.search(r"Metadata:\s*\n((?:\s+\w+\s+:[^\n]+\n)+)", output, re.IGNORECASE)
+    if metadata_block_match:
+        lines = metadata_block_match.group(1).split('\n')
+        for l in lines:
+            if ':' in l:
+                k, v = l.split(':', 1)
+                k = k.strip()
+                v = v.strip()
+                if k and v and k not in ("major_brand", "minor_version", "compatible_brands"):
+                    info["metadata"][k] = v
+
+    return info

@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QMenu, QFileDialog, QMessageBox, QScrollArea,
     QApplication
 )
-from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve, QObject, QEvent
 from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction
 
 from src.utils.logger import APP_DIR
@@ -25,6 +25,27 @@ from src.core.hotkeys import DEFAULT_HOTKEYS, event_to_key_str
 from src.ui.widgets.line_edit import ArrowKeyLineEdit
 from src.ui.widgets.player import EmbeddedVideoPlayer
 from src.ui.dialogs.key_capture import KeyCaptureDialog
+
+
+class FocusOutFilter(QObject):
+    def __init__(self, target_widget, parent=None):
+        super().__init__(parent)
+        self.target_widget = target_widget
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.FocusOut:
+            QTimer.singleShot(50, self.check_focus)
+        return super().eventFilter(obj, event)
+
+    def check_focus(self):
+        from PyQt6.QtWidgets import QLineEdit, QComboBox, QListWidget, QTableWidget
+        focus_w = QApplication.focusWidget()
+        if focus_w is None or (not isinstance(focus_w, (QLineEdit, QComboBox, QListWidget, QTableWidget))
+                               and not focus_w.inherits("QLineEdit")
+                               and not focus_w.inherits("QComboBox")
+                               and not focus_w.inherits("QListWidget")
+                               and not focus_w.inherits("QTableWidget")):
+            self.target_widget.setFocus()
 
 
 class VideoCutterApp(QWidget):
@@ -305,6 +326,15 @@ class VideoCutterApp(QWidget):
         self.radioSame.toggled.connect(self.on_input_modified)
         self.radioOutput.toggled.connect(self.on_input_modified)
         self.radioCustom.toggled.connect(self.on_input_modified)
+
+        # 포커스 아웃 필터 등록 (입력 필드가 포커스 잃으면 타임라인으로 반환)
+        self.focus_filter = FocusOutFilter(self.player_widget.trimming_slider, self)
+        self.nameInput.installEventFilter(self.focus_filter)
+        self.dirInput.installEventFilter(self.focus_filter)
+        self.startInput.installEventFilter(self.focus_filter)
+        self.endInput.installEventFilter(self.focus_filter)
+        self.taskHistoryCombo.installEventFilter(self.focus_filter)
+        self.historyCombo.installEventFilter(self.focus_filter)
 
     def build_hotkey_settings_page(self):
         opt_hotkey_page = QWidget()
@@ -625,13 +655,8 @@ class VideoCutterApp(QWidget):
                     self.startInput.max_val_cs = duration_cs
                     self.endInput.max_val_cs = duration_cs
                     
-                    start_cs = self.startInput.time_to_centiseconds(self.startInput.displayText())
-                    end_cs = self.endInput.time_to_centiseconds(self.endInput.displayText())
-                    
-                    if start_cs > duration_cs:
-                        start_cs = duration_cs
-                    if end_cs > duration_cs or end_cs == 0:
-                        end_cs = duration_cs
+                    start_cs = 0
+                    end_cs = duration_cs
                     
                     self.startInput.setText(self.startInput.centiseconds_to_time(start_cs))
                     self.endInput.setText(self.endInput.centiseconds_to_time(end_cs))
@@ -708,6 +733,7 @@ class VideoCutterApp(QWidget):
             QMessageBox.warning(self, "경고", "올바른 원본 파일이 선택되지 않았습니다.")
 
     def play_output_video(self):
+        self.playOutBtn.setStyleSheet("")
         out_dir = self.dirInput.text()
         out_name = self.nameInput.text()
         output_file = os.path.join(out_dir, out_name)
@@ -782,6 +808,14 @@ class VideoCutterApp(QWidget):
             )
             return
 
+        # 자르기 수행 전 물어보기
+        res = QMessageBox.question(
+            self, "확인", "무손실 컷팅을 실행하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+
         os.makedirs(out_dir, exist_ok=True)
 
         video_out = os.path.join(out_dir, out_name).replace('\\', '/')
@@ -832,11 +866,9 @@ class VideoCutterApp(QWidget):
                 check=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            QMessageBox.information(
-                self,
-                "완료",
-                f"분할 완료",
-            )
+            # 팝업 X -> 대신 재생 버튼이 붉은색으로 변경됨
+            self.playOutBtn.setStyleSheet("background-color: #ff3b30; color: white; font-weight: bold;")
+            
             if self.create_history_flag:
                 self.add_task_history()
             self.update_output_play_btn_state()
@@ -986,6 +1018,7 @@ class VideoCutterApp(QWidget):
     def on_input_modified(self):
         if not self.is_loading_history:
             self.create_history_flag = True
+        self.playOutBtn.setStyleSheet("")
 
     def on_name_input_enter(self):
         current_name = self.nameInput.text()
