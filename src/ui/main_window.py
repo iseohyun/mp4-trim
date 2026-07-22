@@ -893,23 +893,19 @@ class VideoCutterApp(QWidget):
 
     def play_output_video(self):
         self.playOutBtn.setStyleSheet("")
-        out_dir = self.dirInput.text()
-        out_name = self.nameInput.text()
-        output_file = os.path.join(out_dir, out_name)
+        output_file = self.get_full_output_path()
         if output_file and os.path.isfile(output_file):
+            # 컷팅 파일 재생 시 재생목록에 자동 추가하고 현재 플레이어에서 바로 재생
+            self.add_file_to_playlist(output_file, load_immediately=True, save_history=True)
             self.player_widget.load_video(output_file, auto_play=True)
+            self.player_widget.setFocus()
         else:
-            QMessageBox.warning(self, "경고", "편집 영상 파일이 존재하지 않습니다.")
+            QMessageBox.warning(self, "경고", f"편집 영상 파일이 존재하지 않습니다.\n({output_file})")
 
     def update_output_play_btn_state(self):
         if self.playOutBtn.text() == "재생":
-            out_dir = self.dirInput.text()
-            out_name = self.nameInput.text()
-            if out_dir and out_name:
-                output_file = os.path.join(out_dir, out_name)
-                is_exist = os.path.isfile(output_file)
-            else:
-                is_exist = False
+            output_file = self.get_full_output_path()
+            is_exist = bool(output_file and os.path.isfile(output_file))
             self.playOutBtn.setEnabled(is_exist)
         else:
             has_input = bool(self.fileInput.text().strip() and os.path.isfile(self.fileInput.text().strip()))
