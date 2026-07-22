@@ -37,7 +37,7 @@ class EmbeddedVideoPlayer(QWidget):
         main_layout.addWidget(self.trimming_slider, 0)
 
         # 3. 비디오 화면 위 마우스 호버 오버레이 패널
-        self.overlay = QFrame(self.video_widget)
+        self.overlay = QFrame(self)
         self.overlay.setStyleSheet("QFrame { background-color: rgba(15, 20, 28, 0.75); border-radius: 8px; }")
 
         ov_layout = QVBoxLayout(self.overlay)
@@ -92,8 +92,8 @@ class EmbeddedVideoPlayer(QWidget):
 
         self.drag_start_pos = None
 
-        # 동영상 정보 반투명 노란색 오버레이 HUD
-        self.info_overlay = QLabel(self.video_widget)
+        # 동영상 정보 반투명 노란색 오버레이 HUD (EmbeddedVideoPlayer 위에 배치하여 렌더링 가림 현상 해결)
+        self.info_overlay = QLabel(self)
         self.info_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.info_overlay.setStyleSheet("""
             QLabel {
@@ -125,13 +125,15 @@ class EmbeddedVideoPlayer(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        vw_pos = self.video_widget.pos()
         vw_w = self.video_widget.width()
         vw_h = self.video_widget.height()
         ov_h = 100
-        self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
+        self.overlay.setGeometry(vw_pos.x() + 10, vw_pos.y() + vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
         self.overlay.raise_()
         if self._last_hud_visible:
-            self.info_overlay.move(12, 12)
+            self.info_overlay.move(vw_pos.x() + 12, vw_pos.y() + 12)
+            self.info_overlay.raise_()
 
     def mouseMoveEvent(self, event):
         self.show_overlay()
@@ -290,7 +292,8 @@ class EmbeddedVideoPlayer(QWidget):
             if text != self._last_hud_text:
                 self.info_overlay.setText(text)
                 self.info_overlay.adjustSize()
-                self.info_overlay.move(12, 12)
+                vw_pos = self.video_widget.pos()
+                self.info_overlay.move(vw_pos.x() + 12, vw_pos.y() + 12)
                 self._last_hud_text = text
 
             if not self._last_hud_visible:
