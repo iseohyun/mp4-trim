@@ -1017,8 +1017,7 @@ class VideoCutterApp(QWidget):
                     base_name = os.path.basename(text)
                     if base_name.lower().endswith(".mp4"):
                         base_name = base_name[:-4]
-                    if not self.nameInput.text() or self.nameInput.text() == "output":
-                        self.nameInput.setText(base_name)
+                    self.nameInput.setText(base_name)
 
                     self.check_target_file_exists()
                     self.update_timeline_cut_highlights()

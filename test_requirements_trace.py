@@ -118,12 +118,22 @@ def run_traceability_tests():
     req6_pass = transformed_h and transformed_r and transformed_reset and has_save_fn
     results.append(("Req 6: Flip/Rotation (H/V/R/L) Red Border & Ctrl+S Save", "PASS" if req6_pass else "FAIL"))
 
+    req7_pass = hasattr(ex, 'capture_current_frame')
+    results.append(("Req 7: Frame Screenshot Capture on Ctrl+S (capture_current_frame)", "PASS" if req7_pass else "FAIL"))
+
     # -------------------------------------------------------------
-    # Req 7: Un-transformed Ctrl+S Frame Capture / Screenshot
+    # Req 8: Loaded Video Auto Output Filename Default
     # -------------------------------------------------------------
-    print("\n[TEST 7] Un-transformed Ctrl+S Frame Capture / Screenshot...")
-    has_capture_fn = hasattr(ex, 'capture_current_frame')
-    results.append(("Req 7: Frame Screenshot Capture on Ctrl+S (capture_current_frame)", "PASS" if has_capture_fn else "FAIL"))
+    print("\n[TEST 8] Loaded Video Auto Output Filename Default...")
+    dummy_load = os.path.abspath("test_auto_name.mp4").replace("\\", "/")
+    open(dummy_load, "w").close()
+    ex.fileInput.setText(dummy_load)
+    ex.on_file_changed(dummy_load)
+    out_name_val = ex.nameInput.text()
+    req8_pass = (out_name_val == "test_auto_name")
+    print(f" -> Output nameInput text: '{out_name_val}' (expected 'test_auto_name')")
+    results.append(("Req 8: Loaded Video Auto Output Filename Default", "PASS" if req8_pass else "FAIL"))
+    os.remove(dummy_load)
 
     # -------------------------------------------------------------
     # SUMMARY REPORT
