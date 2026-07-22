@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication
 )
 from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve, QObject, QEvent
-from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction
+from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction, QColor
 
 from src.utils.logger import APP_DIR
 from src.utils.time_utils import ms_to_time_str
@@ -25,6 +25,36 @@ from src.core.hotkeys import DEFAULT_HOTKEYS, event_to_key_str
 from src.ui.widgets.line_edit import ArrowKeyLineEdit
 from src.ui.widgets.player import EmbeddedVideoPlayer
 from src.ui.dialogs.key_capture import KeyCaptureDialog
+
+
+def get_user_data_path(file_name: str) -> str:
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        dir_path = os.path.join(appdata, "MP4-Trim")
+        os.makedirs(dir_path, exist_ok=True)
+        return os.path.join(dir_path, file_name)
+    return os.path.join(APP_DIR, file_name)
+
+def save_app_data_json(file_name: str, data):
+    paths = [get_user_data_path(file_name), os.path.join(APP_DIR, file_name)]
+    for p in paths:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"Failed to save JSON to {p}: {e}")
+
+def load_app_data_json(file_name: str):
+    paths = [get_user_data_path(file_name), os.path.join(APP_DIR, file_name)]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logging.error(f"Failed to load JSON from {p}: {e}")
+    return None
 
 
 class FocusOutFilter(QObject):
@@ -45,17 +75,17 @@ class FocusOutFilter(QObject):
                                and not focus_w.inherits("QComboBox")
                                and not focus_w.inherits("QListWidget")
                                and not focus_w.inherits("QTableWidget")):
-            self.target_widget.setFocus()
+            if self.target_widget:
+                self.target_widget.setFocus()
 
 
 class VideoCutterApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.history_file = os.path.join(APP_DIR, "trim_history.json")
-        self.task_history_file = os.path.join(APP_DIR, "task_history.json")
         self.task_histories = []
         self.create_history_flag = True
         self.is_loading_history = False
+        self.is_loading_file = False
         self.is_loading_file = False
         self.last_enter_name = ""
         self.original_duration_cs = 35999999
@@ -533,30 +563,19 @@ class VideoCutterApp(QWidget):
         self.animate_sidebar(self.playlist_sidebar, target_width=240)
 
     def load_playlist_history(self):
-        history_path = os.path.join(APP_DIR, "playlist_history.json")
-        if os.path.exists(history_path):
-            try:
-                with open(history_path, "r", encoding="utf-8") as f:
-                    saved_paths = json.load(f)
-                    if isinstance(saved_paths, list):
-                        self.playlist_files = []
-                        self.playlist_widget.clear()
-                        for path in saved_paths:
-                            if isinstance(path, str):
-                                norm_p = path.replace('\\', '/')
-                                if os.path.isfile(norm_p):
-                                    self.add_file_to_playlist(norm_p, load_immediately=False, save_history=False)
-                        self.save_playlist_history()
-            except Exception as e:
-                logging.error(f"Failed to load playlist history: {e}")
+        saved_paths = load_app_data_json("playlist_history.json")
+        if saved_paths and isinstance(saved_paths, list):
+            self.playlist_files = []
+            self.playlist_widget.clear()
+            for path in saved_paths:
+                if isinstance(path, str):
+                    norm_p = path.replace('\\', '/')
+                    if os.path.isfile(norm_p):
+                        self.add_file_to_playlist(norm_p, load_immediately=False, save_history=False)
+            self.save_playlist_history()
 
     def save_playlist_history(self):
-        history_path = os.path.join(APP_DIR, "playlist_history.json")
-        try:
-            with open(history_path, "w", encoding="utf-8") as f:
-                json.dump(self.playlist_files, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logging.error(f"Failed to save playlist history: {e}")
+        save_app_data_json("playlist_history.json", self.playlist_files)
 
     def add_file_to_playlist(self, file_path: str, load_immediately=True, save_history=True):
         file_path = file_path.replace('\\', '/')
@@ -944,8 +963,8 @@ class VideoCutterApp(QWidget):
             self.playOutBtn.setStyleSheet("background-color: #ff3b30; color: white; font-weight: bold;")
             self.playOutBtn.setEnabled(True)
             
-            if self.create_history_flag:
-                self.add_task_history()
+            # 무손실 컷팅 성공 시 항상 작업 히스토리 저장
+            self.add_task_history()
 
             self.refresh_playlist_colors()
             self.update_timeline_cut_highlights()
@@ -954,32 +973,18 @@ class VideoCutterApp(QWidget):
 
     def save_history(self, path):
         path = path.replace('\\', '/')
-        history = []
-        if os.path.exists(self.history_file):
-            try:
-                with open(self.history_file, "r", encoding="utf-8") as f:
-                    history = [p.replace('\\', '/') for p in json.load(f)]
-            except:
-                pass
+        saved = load_app_data_json("trim_history.json")
+        history = [p.replace('\\', '/') for p in saved] if saved and isinstance(saved, list) else []
         if path in history:
             history.remove(path)
         history.insert(0, path)
         history = history[:5]
-        try:
-            with open(self.history_file, "w", encoding="utf-8") as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
-            self.refresh_history_combo(history)
-        except:
-            pass
+        save_app_data_json("trim_history.json", history)
+        self.refresh_history_combo(history)
 
     def load_history(self):
-        history = []
-        if os.path.exists(self.history_file):
-            try:
-                with open(self.history_file, "r", encoding="utf-8") as f:
-                    history = [p.replace('\\', '/') for p in json.load(f)]
-            except:
-                pass
+        saved = load_app_data_json("trim_history.json")
+        history = [p.replace('\\', '/') for p in saved] if saved and isinstance(saved, list) else []
         self.refresh_history_combo(history)
 
     def refresh_history_combo(self, history):
@@ -1001,13 +1006,8 @@ class VideoCutterApp(QWidget):
             self.historyCombo.setCurrentIndex(0)
 
     def load_task_history(self):
-        self.task_histories = []
-        if os.path.exists(self.task_history_file):
-            try:
-                with open(self.task_history_file, "r", encoding="utf-8") as f:
-                    self.task_histories = json.load(f)
-            except:
-                pass
+        saved = load_app_data_json("task_history.json")
+        self.task_histories = saved if saved and isinstance(saved, list) else []
         self.refresh_task_history_combo()
         self.refresh_playlist_colors()
         self.update_timeline_cut_highlights()
@@ -1030,7 +1030,12 @@ class VideoCutterApp(QWidget):
         self.fileInput.setText(task['video_in'])
         self.startInput.setText(task['start_time'])
         self.endInput.setText(task['end_time'])
-        self.nameInput.setText(task['out_name'])
+        
+        raw_out_name = task.get('out_name', '')
+        if raw_out_name.lower().endswith(".mp4"):
+            raw_out_name = raw_out_name[:-4]
+        self.nameInput.setText(raw_out_name)
+
         self.muteCheck.setChecked(task['mute'])
         self.copyMetaCheck.setChecked(task['copy_meta'])
         self.autoNumberCheck.setChecked(task['auto_number'])
@@ -1049,11 +1054,14 @@ class VideoCutterApp(QWidget):
         self.is_loading_history = False
 
     def add_task_history(self):
-        video_in = self.fileInput.text()
+        video_in = self.fileInput.text().strip()
+        if not video_in:
+            return
         start_time = self.startInput.displayText()
         end_time = self.endInput.displayText()
-        out_name = self.nameInput.text()
-        out_dir = self.dirInput.text()
+        clean_name = self.get_clean_output_name()
+        out_name = clean_name + ".mp4"
+        out_dir = self.dirInput.text().strip()
         
         if self.radioSame.isChecked():
             radio_state = "same"
@@ -1087,14 +1095,10 @@ class VideoCutterApp(QWidget):
         self.task_histories.insert(0, task)
         self.task_histories = self.task_histories[:50]
         
-        try:
-            with open(self.task_history_file, "w", encoding="utf-8") as f:
-                json.dump(self.task_histories, f, ensure_ascii=False, indent=2)
-            self.refresh_task_history_combo()
-            self.refresh_playlist_colors()
-            self.update_timeline_cut_highlights()
-        except Exception as e:
-            print("Failed to save task history:", e)
+        save_app_data_json("task_history.json", self.task_histories)
+        self.refresh_task_history_combo()
+        self.refresh_playlist_colors()
+        self.update_timeline_cut_highlights()
 
     def refresh_playlist_colors(self):
         for i in range(self.playlist_widget.count()):
