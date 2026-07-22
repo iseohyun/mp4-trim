@@ -25,11 +25,26 @@ class EmbeddedVideoPlayer(QWidget):
         self.audio_output = QAudioOutput(self)
         self.media_player.setAudioOutput(self.audio_output)
 
-        # 1. 상단 동영상 화면
-        self.video_widget = QVideoWidget(self)
+        # 1. 상단 동영상 화면 (4px Red Border 지원 컨테이너)
+        self.video_container = QFrame(self)
+        self.video_container.setObjectName("video_container")
+        self.video_container.setStyleSheet("QFrame#video_container { background-color: #000000; border-radius: 0px; }")
+        container_layout = QVBoxLayout(self.video_container)
+        container_layout.setContentsMargins(4, 4, 4, 4)
+        container_layout.setSpacing(0)
+
+        self.video_widget = QVideoWidget(self.video_container)
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.media_player.setVideoOutput(self.video_widget)
-        main_layout.addWidget(self.video_widget, 1)
+        container_layout.addWidget(self.video_widget, 1)
+
+        main_layout.addWidget(self.video_container, 1)
+
+        # 변형 상태 표시 빨간색 배지
+        self.transform_badge = QLabel(self.video_widget)
+        self.transform_badge.setStyleSheet("QLabel { background-color: rgba(255, 59, 48, 0.95); color: #ffffff; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 4px; }")
+        self.transform_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.transform_badge.hide()
 
         # 2. 하단 100% 필름스트립 타임라인 슬라이더
         self.trimming_slider = TrimmingSliderWidget(self)
@@ -241,9 +256,24 @@ class EmbeddedVideoPlayer(QWidget):
 
     def update_transform_border(self):
         if self.is_transformed():
-            self.video_widget.setStyleSheet("QVideoWidget { border: 3px solid #ff3b30; border-radius: 4px; }")
+            self.video_container.setStyleSheet("QFrame#video_container { background-color: #ff3b30; border-radius: 6px; }")
+            parts = []
+            if self.transform_rotation != 0:
+                parts.append(f"{self.transform_rotation}° 회전")
+            if self.transform_flip_h:
+                parts.append("수평 반전")
+            if self.transform_flip_v:
+                parts.append("수직 반전")
+                
+            desc = " | ".join(parts)
+            self.transform_badge.setText(f"[ {desc} ]   저장: Ctrl+S")
+            self.transform_badge.adjustSize()
+            self.transform_badge.move(14, 14)
+            self.transform_badge.show()
+            self.transform_badge.raise_()
         else:
-            self.video_widget.setStyleSheet("")
+            self.video_container.setStyleSheet("QFrame#video_container { background-color: #000000; border-radius: 0px; }")
+            self.transform_badge.hide()
 
     def reset_transform(self):
         self.transform_rotation = 0
