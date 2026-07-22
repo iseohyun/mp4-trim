@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QMenu, QFileDialog, QMessageBox, QScrollArea,
     QApplication
 )
-from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve, QObject, QEvent
+from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve, QObject, QEvent, QSize
 from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction, QColor
 
 from src.utils.logger import APP_DIR
@@ -367,10 +367,8 @@ class VideoCutterApp(QWidget):
                 outline: none;
             }
             QListWidget::item {
-                padding-top: 0.25em;
-                padding-bottom: 0.25em;
-                padding-left: 0.5em;
-                padding-right: 0.5em;
+                padding-left: 6px;
+                padding-right: 6px;
                 margin: 0px;
                 border-bottom: 1px solid #282828;
             }
@@ -379,7 +377,7 @@ class VideoCutterApp(QWidget):
                 color: white;
             }
             QListWidget::item:hover {
-                background-color: #333333;
+                border: 1px solid #0078d7;
             }
         """)
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -624,6 +622,7 @@ class VideoCutterApp(QWidget):
                 item = QListWidgetItem(os.path.basename(file_path))
                 item.setToolTip(file_path)
                 item.setData(Qt.ItemDataRole.UserRole, file_path)
+                item.setSizeHint(QSize(0, 22))
                 self.playlist_widget.addItem(item)
             
             for i in range(self.playlist_widget.count()):
@@ -1220,15 +1219,24 @@ class VideoCutterApp(QWidget):
     def refresh_playlist_colors(self):
         for i in range(self.playlist_widget.count()):
             item = self.playlist_widget.item(i)
+            item.setSizeHint(QSize(0, 22))  # 고밀도 세로 간격 22px 지정
             v_path = item.data(Qt.ItemDataRole.UserRole)
-            cut_count = sum(1 for t in self.task_histories if t.get('video_in') == v_path)
+            if not v_path:
+                continue
+            
+            norm_v = os.path.normpath(v_path).lower()
+            cut_count = sum(
+                1 for t in self.task_histories 
+                if t.get('video_in') and os.path.normpath(t.get('video_in')).lower() == norm_v
+            )
+            
             if cut_count >= 3:
-                # 3개 이상: 선명한 파스텔 노랑 배경 + 흰색 글씨
-                item.setBackground(QColor("#615610"))
+                # 3개 이상: 선명한 파스텔 골드 노랑 배경 (#a69519) + 흰색 글씨
+                item.setBackground(QColor("#a69519"))
                 item.setForeground(QColor("#ffffff"))
             elif cut_count >= 1:
-                # 1~2개: 연한 파스텔 노랑 배경 + 흰색 글씨
-                item.setBackground(QColor("#3d3714"))
+                # 1~2개: 은은한 파스텔 골드 노랑 배경 (#73681d) + 흰색 글씨
+                item.setBackground(QColor("#73681d"))
                 item.setForeground(QColor("#ffffff"))
             else:
                 item.setBackground(QColor("#1e1e1e"))
