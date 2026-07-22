@@ -141,11 +141,25 @@ def get_media_creation_time_and_duration(video_path: str):
             
     return duration_cs, creation_dt
 
+FORCE_CAPS_LOCK_DEBUG = None
+
+try:
+    _user32 = ctypes.windll.user32
+    _user32.GetKeyState.argtypes = [ctypes.c_int]
+    _user32.GetKeyState.restype = ctypes.c_short
+except:
+    _user32 = None
+
 def is_caps_lock_on() -> bool:
-    try:
-        return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
-    except:
-        return False
+    global FORCE_CAPS_LOCK_DEBUG
+    if FORCE_CAPS_LOCK_DEBUG is not None:
+        return FORCE_CAPS_LOCK_DEBUG
+    if _user32:
+        try:
+            return bool(_user32.GetKeyState(0x14) & 1)
+        except:
+            pass
+    return False
 
 def get_detailed_video_info(video_path: str) -> dict:
     ffmpeg_bin = get_ffmpeg_path()

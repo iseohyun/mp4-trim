@@ -298,6 +298,26 @@ class EmbeddedVideoPlayer(QWidget):
                 self.info_overlay.show()
                 self.info_overlay.raise_()
                 self._last_hud_visible = True
+                
+                # 진단용 스크린샷 및 로그 자동 기록
+                try:
+                    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+                    debug_dir = os.path.join(root_dir, "debug_screenshots")
+                    os.makedirs(debug_dir, exist_ok=True)
+                    snap_path = os.path.join(debug_dir, "hud_overlay_snap.png")
+                    def capture_snap():
+                        try:
+                            w = self.window()
+                            if w:
+                                px = w.grab()
+                                px.save(snap_path)
+                                logging.info(f"[HUD DIAGNOSTIC] Captured debug screenshot to {snap_path}")
+                        except Exception as err:
+                            logging.error(f"[HUD DIAGNOSTIC] Capture error: {err}")
+                    QTimer.singleShot(200, capture_snap)
+                    logging.info(f"[HUD DIAGNOSTIC] HUD Showed. geom={self.info_overlay.geometry()}, isVisible={self.info_overlay.isVisible()}")
+                except Exception as e:
+                    logging.error(f"[HUD DIAGNOSTIC] Screenshot trigger error: {e}")
         else:
             if self._last_hud_visible:
                 self.info_overlay.hide()
