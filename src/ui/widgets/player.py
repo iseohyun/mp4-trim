@@ -1,7 +1,7 @@
 import os
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -94,15 +94,16 @@ class EmbeddedVideoPlayer(QWidget):
 
         # 동영상 정보 반투명 노란색 오버레이 HUD
         self.info_overlay = QLabel(self.video_widget)
+        self.info_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.info_overlay.setStyleSheet("""
             QLabel {
-                background-color: rgba(0, 0, 0, 0.65);
+                background-color: rgba(0, 0, 0, 0.75);
                 color: #ffeb3b;  /* 노란색 */
-                border-radius: 4px;
-                padding: 8px;
+                border-radius: 6px;
+                padding: 8px 12px;
                 font-family: Consolas, monospace;
                 font-size: 11px;
-                border: 1px solid rgba(255, 235, 59, 0.2);
+                border: 1px solid rgba(255, 235, 59, 0.3);
             }
         """)
         self.info_overlay.hide()
@@ -110,6 +111,8 @@ class EmbeddedVideoPlayer(QWidget):
         self.video_info = None
         self.has_video_loaded = False
         self.video_path_cached = ""
+        self._last_hud_text = ""
+        self._last_hud_visible = False
 
         # Caps Lock 감지 및 HUD 갱신 타이머 (100ms)
         self.hud_timer = QTimer(self)
@@ -127,8 +130,8 @@ class EmbeddedVideoPlayer(QWidget):
         ov_h = 100
         self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
         self.overlay.raise_()
-        self.info_overlay.move(10, 10)
-        self.info_overlay.raise_()
+        if self._last_hud_visible:
+            self.info_overlay.move(12, 12)
 
     def mouseMoveEvent(self, event):
         self.show_overlay()
@@ -242,7 +245,9 @@ class EmbeddedVideoPlayer(QWidget):
 
     def update_hud(self):
         from src.core.metadata import is_caps_lock_on
-        if is_caps_lock_on() and self.has_video_loaded and self.video_info:
+        should_show = is_caps_lock_on() and self.has_video_loaded and bool(self.video_info)
+        
+        if should_show:
             pos_ms = self.media_player.position()
             fps = self.video_info.get("fps", 0.0)
             
@@ -256,14 +261,9 @@ class EmbeddedVideoPlayer(QWidget):
 
             time_str = ms_to_time_str(pos_ms)
             
-            # 주요 메타데이터 파싱 (너무 길지 않게 최대 5개 추출)
-            meta_lines = []
-            for k, v in self.video_info.get("metadata", {}).items():
-                if len(meta_lines) >= 5:
-                    break
-                meta_lines.append(f"{k}: {v}")
-            meta_str = "\n  ".join(meta_lines) if meta_lines else "None"
-
+            # Ctrl 키가 눌렸을 때 추가 정보 확장
+            ctrl_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier)
+            
             text = (
                 f"[ 동영상 상세 정보 ]\n"
                 f"• 파일명: {os.path.basename(self.video_path_cached)}\n"
@@ -273,12 +273,32 @@ class EmbeddedVideoPlayer(QWidget):
                 f"• 총길이: {self.video_info['duration']}\n"
                 f"• 현재시각: {time_str} {frame_str}\n"
                 f"• 데이터레이트: {self.video_info['bitrate']}\n"
-                f"• 비트심도: {self.video_info['bit_depth']} ({self.video_info['pix_fmt']})\n"
-                f"• 메타데이터:\n  {meta_str}"
+                f"• 비트심도: {self.video_info['bit_depth']} ({self.video_info['pix_fmt']})"
             )
-            self.info_overlay.setText(text)
-            self.info_overlay.adjustSize()
-            self.info_overlay.show()
-            self.info_overlay.raise_()
+            
+            if ctrl_pressed:
+                meta_lines = []
+                for k, v in self.video_info.get("metadata", {}).items():
+                    if len(meta_lines) >= 10:
+                        break
+                    meta_lines.append(f"{k}: {v}")
+                meta_str = "\n  ".join(meta_lines) if meta_lines else "None"
+                text += f"\n• 메타데이터 (확장):\n  {meta_str}"
+            else:
+                text += f"\n\n[💡 Ctrl 키를 누르면 상세 메타데이터가 표시됩니다]"
+
+            if text != self._last_hud_text:
+                self.info_overlay.setText(text)
+                self.info_overlay.adjustSize()
+                self.info_overlay.move(12, 12)
+                self._last_hud_text = text
+
+            if not self._last_hud_visible:
+                self.info_overlay.show()
+                self.info_overlay.raise_()
+                self._last_hud_visible = True
         else:
-            self.info_overlay.hide()
+            if self._last_hud_visible:
+                self.info_overlay.hide()
+                self._last_hud_visible = False
+                self._last_hud_text = ""
