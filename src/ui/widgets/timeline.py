@@ -252,7 +252,7 @@ class TrimmingSliderWidget(QWidget):
                     font.setPointSize(9)
                     font.setBold(True)
                     painter.setFont(font)
-                    painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.TextSingleLine, r_name)
+                    painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine, r_name)
 
         # 1. 선택 영역 밖 (0 ~ start_ms, end_ms ~ duration_ms) 반투명 블랙 딤(Dim) 처리
         dim_color = QColor(0, 0, 0, 160)
