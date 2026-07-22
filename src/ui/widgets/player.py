@@ -92,18 +92,24 @@ class EmbeddedVideoPlayer(QWidget):
 
         self.drag_start_pos = None
 
-        # 동영상 정보 반투명 노란색 오버레이 HUD
-        self.info_overlay = QLabel(self.video_widget)
+        # 동영상 정보 반투명 노란색 오버레이 HUD (Native DWM Top-Level Window로 Direct3D 덮임 완벽 방지)
+        self.info_overlay = QLabel(self)
+        self.info_overlay.setWindowFlags(
+            Qt.WindowType.ToolTip |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
         self.info_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.info_overlay.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.info_overlay.setStyleSheet("""
             QLabel {
-                background-color: rgba(0, 0, 0, 0.75);
+                background-color: rgba(0, 0, 0, 0.85);
                 color: #ffeb3b;  /* 노란색 */
                 border-radius: 6px;
                 padding: 8px 12px;
                 font-family: Consolas, monospace;
                 font-size: 11px;
-                border: 1px solid rgba(255, 235, 59, 0.3);
+                border: 1px solid rgba(255, 235, 59, 0.4);
             }
         """)
         self.info_overlay.hide()
@@ -132,8 +138,9 @@ class EmbeddedVideoPlayer(QWidget):
         ov_h = 100
         self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
         self.overlay.raise_()
-        if self._last_hud_visible:
-            self.info_overlay.move(12, 12)
+        if self._last_hud_visible and self.video_widget.isVisible():
+            gpos = self.video_widget.mapToGlobal(QPoint(12, 12))
+            self.info_overlay.move(gpos)
             self.info_overlay.raise_()
 
     def mouseMoveEvent(self, event):
@@ -258,6 +265,11 @@ class EmbeddedVideoPlayer(QWidget):
         # 5틱(500ms) 연속으로 OFF 상태일 때만 실제 hide 처리 (순간 깜빡임 방지 디바운스)
         should_show = (self._hud_false_counter < 5) if self._last_hud_visible else raw_should
 
+        # 메인 윈도우가 최소화되거나 숨겨졌으면 HUD도 함께 숨김
+        top_win = self.window()
+        if top_win and (top_win.isMinimized() or not top_win.isVisible() or not self.isVisible()):
+            should_show = False
+
         if should_show:
             pos_ms = self.media_player.position()
             fps = self.video_info.get("fps", 0.0)
@@ -301,15 +313,17 @@ class EmbeddedVideoPlayer(QWidget):
             if text != self._last_hud_text:
                 self.info_overlay.setText(text)
                 self.info_overlay.adjustSize()
-                self.info_overlay.move(12, 12)
-                self.info_overlay.raise_()
                 self._last_hud_text = text
+
+            gpos = self.video_widget.mapToGlobal(QPoint(12, 12))
+            self.info_overlay.move(gpos)
+            self.info_overlay.raise_()
 
             if not self._last_hud_visible:
                 self.info_overlay.show()
                 self.info_overlay.raise_()
                 self._last_hud_visible = True
-                logging.info(f"[HUD DIAGNOSTIC] HUD Showed. geom={self.info_overlay.geometry()}")
+                logging.info(f"[HUD DIAGNOSTIC] DWM ToolTip HUD Showed at {gpos}")
                 
                 # 영구 보존 디렉토리에 5초간 연속 5회 타임랩스 스크린샷 기록
                 try:
