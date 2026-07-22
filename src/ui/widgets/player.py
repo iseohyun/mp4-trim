@@ -265,10 +265,12 @@ class EmbeddedVideoPlayer(QWidget):
         # 5틱(500ms) 연속으로 OFF 상태일 때만 실제 hide 처리 (순간 깜빡임 방지 디바운스)
         should_show = (self._hud_false_counter < 5) if self._last_hud_visible else raw_should
 
-        # 메인 윈도우가 최소화되거나 숨겨졌으면 HUD도 함께 숨김
+        # 메인 윈도우가 포커스를 잃었거나(다른 앱 선택) 최소화/숨김 상태면 HUD 즉시 숨김
         top_win = self.window()
-        if top_win and (top_win.isMinimized() or not top_win.isVisible() or not self.isVisible()):
-            should_show = False
+        if top_win:
+            if not top_win.isActiveWindow() or top_win.isMinimized() or not top_win.isVisible() or not self.isVisible():
+                should_show = False
+                self._hud_false_counter = 5  # 포커스 해제 시 디바운스 없이 즉시 끄기
 
         if should_show:
             pos_ms = self.media_player.position()

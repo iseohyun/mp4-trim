@@ -1060,6 +1060,12 @@ class VideoCutterApp(QWidget):
         else:
             self.nameInput.setStyleSheet("")
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange:
+            if hasattr(self, 'player_widget') and self.player_widget:
+                self.player_widget.update_hud()
+
     def keyPressEvent(self, event: QKeyEvent):
         focus_w = QApplication.focusWidget()
         is_editing_text = isinstance(focus_w, QLineEdit)
