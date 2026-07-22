@@ -1224,21 +1224,26 @@ class VideoCutterApp(QWidget):
             if not v_path:
                 continue
             
-            norm_v = os.path.normpath(v_path).lower()
+            norm_v = os.path.abspath(os.path.normpath(v_path)).lower()
             cut_count = sum(
                 1 for t in self.task_histories 
-                if t.get('video_in') and os.path.normpath(t.get('video_in')).lower() == norm_v
+                if t.get('video_in') and os.path.abspath(os.path.normpath(t.get('video_in'))).lower() == norm_v
             )
             
             if cut_count >= 3:
-                # 3개 이상: 선명한 파스텔 골드 노랑 배경 (#a69519) + 흰색 글씨
-                item.setBackground(QColor("#a69519"))
+                # 3개 이상 컷팅 이력: 선명한 파스텔톤 노란색 배경 (#d4bd1b) + 짙은 어두운 글씨 (#111111)
+                item.setBackground(QColor("#d4bd1b"))
+                item.setForeground(QColor("#111111"))
+            elif cut_count == 2:
+                # 2개 컷팅 이력: 중간 옅은 파스텔 노란색 배경 (#8c7c1e) + 흰색 글씨 (#ffffff)
+                item.setBackground(QColor("#8c7c1e"))
                 item.setForeground(QColor("#ffffff"))
-            elif cut_count >= 1:
-                # 1~2개: 은은한 파스텔 골드 노랑 배경 (#73681d) + 흰색 글씨
-                item.setBackground(QColor("#73681d"))
-                item.setForeground(QColor("#ffffff"))
+            elif cut_count == 1:
+                # 1개 컷팅 이력: 아주 옅은 파스텔 노란색 배경 (#59521d) + 연한 크림 글씨 (#ffffcc)
+                item.setBackground(QColor("#59521d"))
+                item.setForeground(QColor("#ffffcc"))
             else:
+                # 0개 컷팅 이력: 기본 어두운 배경 (#1e1e1e) + 연한 회색 글씨 (#dcdcdc)
                 item.setBackground(QColor("#1e1e1e"))
                 item.setForeground(QColor("#dcdcdc"))
 
