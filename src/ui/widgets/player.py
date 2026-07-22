@@ -1,11 +1,13 @@
 import os
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy, QApplication,
+    QGraphicsView, QGraphicsScene
 )
-from PyQt6.QtCore import Qt, QTimer, QUrl, QPoint
+from PyQt6.QtCore import Qt, QTimer, QUrl, QPoint, QSizeF
+from PyQt6.QtGui import QTransform
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem, QVideoWidget
 
 from src.ui.widgets.timeline import TrimmingSliderWidget, ThumbnailGeneratorThread
 from src.utils.time_utils import ms_to_time_str
@@ -25,7 +27,7 @@ class EmbeddedVideoPlayer(QWidget):
         self.audio_output = QAudioOutput(self)
         self.media_player.setAudioOutput(self.audio_output)
 
-        # 1. 상단 동영상 화면 (4px Red Border 지원 컨테이너)
+        # 1. 상단 동영상 화면 (GraphicsView 기반 실시간 회전/반전 렌더러)
         self.video_container = QFrame(self)
         self.video_container.setObjectName("video_container")
         self.video_container.setStyleSheet("QFrame#video_container { background-color: #000000; border-radius: 0px; }")
@@ -33,10 +35,19 @@ class EmbeddedVideoPlayer(QWidget):
         container_layout.setContentsMargins(4, 4, 4, 4)
         container_layout.setSpacing(0)
 
-        self.video_widget = QVideoWidget(self.video_container)
-        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.media_player.setVideoOutput(self.video_widget)
-        container_layout.addWidget(self.video_widget, 1)
+        self.graphics_scene = QGraphicsScene(self)
+        self.graphics_view = QGraphicsView(self.graphics_scene, self.video_container)
+        self.graphics_view.setStyleSheet("QGraphicsView { background-color: #000000; border: none; }")
+        self.graphics_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.graphics_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.graphics_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self.video_item = QGraphicsVideoItem()
+        self.graphics_scene.addItem(self.video_item)
+        self.media_player.setVideoOutput(self.video_item)
+
+        self.video_widget = self.graphics_view
+        container_layout.addWidget(self.graphics_view, 1)
 
         main_layout.addWidget(self.video_container, 1)
 
@@ -275,6 +286,27 @@ class EmbeddedVideoPlayer(QWidget):
             self.video_container.setStyleSheet("QFrame#video_container { background-color: #000000; border-radius: 0px; }")
             self.transform_badge.hide()
 
+        # -------------------------------------------------------------
+        # Live Visual Transformation on Screen (QGraphicsVideoItem)
+        # -------------------------------------------------------------
+        if hasattr(self, 'video_item') and self.video_item and hasattr(self, 'graphics_view') and self.graphics_view:
+            v_size = self.graphics_view.size()
+            w, h = float(v_size.width()), float(v_size.height())
+            if w > 0 and h > 0:
+                self.graphics_scene.setSceneRect(0, 0, w, h)
+                self.video_item.setSize(QSizeF(w, h))
+                self.video_item.setTransformOriginPoint(w / 2.0, h / 2.0)
+
+            # Apply live rotation to video item on screen
+            self.video_item.setRotation(float(self.transform_rotation))
+
+            # Apply live scale flip (hflip, vflip) to video item on screen
+            sx = -1.0 if self.transform_flip_h else 1.0
+            sy = -1.0 if self.transform_flip_v else 1.0
+            t = QTransform()
+            t.scale(sx, sy)
+            self.video_item.setTransform(t)
+
     def reset_transform(self):
         self.transform_rotation = 0
         self.transform_flip_h = False
@@ -454,3 +486,16 @@ class EmbeddedVideoPlayer(QWidget):
                 self._last_hud_visible = False
                 self._last_hud_text = ""
                 logging.info(f"[HUD DIAGNOSTIC] HUD Hidden after debounce.")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'overlay') and self.overlay and hasattr(self, 'video_widget'):
+            self.overlay.resize(self.video_widget.size())
+        if hasattr(self, 'graphics_view') and hasattr(self, 'video_item'):
+            v_size = self.graphics_view.size()
+            w, h = float(v_size.width()), float(v_size.height())
+            if w > 0 and h > 0:
+                self.graphics_scene.setSceneRect(0, 0, w, h)
+                self.video_item.setSize(QSizeF(w, h))
+                self.video_item.setTransformOriginPoint(w / 2.0, h / 2.0)
+                self.update_transform_border()
