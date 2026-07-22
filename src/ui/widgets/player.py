@@ -310,6 +310,32 @@ class EmbeddedVideoPlayer(QWidget):
                 self.info_overlay.raise_()
                 self._last_hud_visible = True
                 logging.info(f"[HUD DIAGNOSTIC] HUD Showed. geom={self.info_overlay.geometry()}")
+                
+                # 영구 보존 디렉토리에 5초간 연속 5회 타임랩스 스크린샷 기록
+                try:
+                    save_dirs = [
+                        r"C:\git\mp4-trim\debug_screenshots",
+                        os.path.expanduser(r"~/.mp4-trim/debug_screenshots")
+                    ]
+                    for d in save_dirs:
+                        os.makedirs(d, exist_ok=True)
+                    
+                    def capture_step(seq_num, delay_ms):
+                        try:
+                            w = self.window()
+                            if w:
+                                px = w.grab()
+                                for d in save_dirs:
+                                    p = os.path.join(d, f"hud_seq_{seq_num}_{delay_ms}ms.png")
+                                    px.save(p)
+                                logging.info(f"[HUD DIAGNOSTIC] Saved sequential snapshot #{seq_num} ({delay_ms}ms)")
+                        except Exception as err:
+                            logging.error(f"[HUD DIAGNOSTIC] Capture step error: {err}")
+
+                    for seq, delay in enumerate([100, 300, 600, 1000, 1500], 1):
+                        QTimer.singleShot(delay, lambda s=seq, d=delay: capture_step(s, d))
+                except Exception as e:
+                    logging.error(f"[HUD DIAGNOSTIC] Sequential screenshot trigger error: {e}")
         else:
             if self._last_hud_visible:
                 self.info_overlay.hide()
