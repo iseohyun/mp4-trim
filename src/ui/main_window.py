@@ -755,8 +755,9 @@ class VideoCutterApp(QWidget):
         new_file_path = os.path.join(old_dir, new_file_name).replace('\\', '/')
         
         if os.path.exists(new_file_path):
-            QMessageBox.warning(self, "경고", f"동일한 이름의 파일이 이미 존재합니다.\n{new_file_name}")
-            return
+            new_file_path = get_unique_filename(new_file_path)
+            new_file_name = os.path.basename(new_file_path)
+            new_base = os.path.splitext(new_file_name)[0]
             
         try:
             is_active = (self.player_widget.video_path_cached == old_file_path or self.fileInput.text() == old_file_path)

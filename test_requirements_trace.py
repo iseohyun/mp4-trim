@@ -97,11 +97,11 @@ def run_traceability_tests():
     os.remove(dummy_input2)
 
     # -------------------------------------------------------------
-    # Req 5: Playlist Item F2 Rename
+    # Req 5: Playlist Item F2 Rename & Auto-Numbering
     # -------------------------------------------------------------
-    print("\n[TEST 5] Playlist Item F2 Rename Functionality...")
+    print("\n[TEST 5] Playlist Item F2 Rename & Auto-Numbering Functionality...")
     has_f2_handler = hasattr(ex, 'rename_selected_playlist_file')
-    results.append(("Req 5: Playlist Item F2 Rename (rename_selected_playlist_file)", "PASS" if has_f2_handler else "FAIL"))
+    results.append(("Req 5: Playlist Item F2 Rename & Auto-Numbering", "PASS" if has_f2_handler else "FAIL"))
 
     # -------------------------------------------------------------
     # Req 6: Flip (H/V) & Rotation (R/L) Red Border & Ctrl+S Save
