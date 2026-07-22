@@ -10,10 +10,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QCheckBox, QRadioButton, QButtonGroup, QComboBox, QFrame, QStackedWidget,
     QListWidget, QListWidgetItem, QMenu, QFileDialog, QMessageBox, QScrollArea,
-    QApplication
+    QApplication, QStyledItemDelegate, QStyle
 )
 from PyQt6.QtCore import Qt, QStandardPaths, QTimer, QPropertyAnimation, QEasingCurve, QObject, QEvent, QSize
-from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction, QColor
+from PyQt6.QtGui import QIcon, QKeySequence, QKeyEvent, QAction, QColor, QPen
 
 from src.utils.logger import APP_DIR
 from src.utils.time_utils import ms_to_time_str
@@ -77,6 +77,39 @@ class FocusOutFilter(QObject):
                                and not focus_w.inherits("QTableWidget")):
             if self.target_widget:
                 self.target_widget.setFocus()
+
+
+class PlaylistDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        painter.save()
+        rect = option.rect
+        
+        bg_brush = index.data(Qt.ItemDataRole.BackgroundRole)
+        fg_brush = index.data(Qt.ItemDataRole.ForegroundRole)
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        
+        if is_selected:
+            # 현재 선택된 파일: 파란색 배경 + 흰색 글씨
+            painter.fillRect(rect, QColor('#0078d7'))
+            painter.setPen(QColor('#ffffff'))
+        elif bg_brush:
+            # 컷팅 히스토리가 있는 파일: 노란색 단계별 배경 + 지정된 글씨색(흰색)
+            painter.fillRect(rect, bg_brush.color())
+            painter.setPen(fg_brush.color() if fg_brush else QColor('#ffffff'))
+        else:
+            # 기본 파일: 어두운 배경 + 흰색 글씨
+            painter.fillRect(rect, QColor('#1e1e1e'))
+            painter.setPen(QColor('#ffffff'))
+            
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        text_rect = rect.adjusted(8, 0, -8, 0)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        
+        # 하단 구분선
+        painter.setPen(QPen(QColor('#282828'), 1))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        
+        painter.restore()
 
 
 class CustomPlaylistListWidget(QListWidget):
@@ -358,26 +391,14 @@ class VideoCutterApp(QWidget):
         sidebar_layout.addLayout(sb_header)
 
         self.playlist_widget = CustomPlaylistListWidget()
+        self.playlist_widget.setItemDelegate(PlaylistDelegate(self.playlist_widget))
         self.playlist_widget.setStyleSheet("""
             QListWidget {
                 background-color: #1e1e1e;
-                color: #dcdcdc;
+                color: #ffffff;
                 border: 1px solid #333;
                 border-radius: 4px;
                 outline: none;
-            }
-            QListWidget::item {
-                padding-left: 6px;
-                padding-right: 6px;
-                margin: 0px;
-                border-bottom: 1px solid #282828;
-            }
-            QListWidget::item:selected {
-                background-color: #0078d7;
-                color: white;
-            }
-            QListWidget::item:hover {
-                border: 1px solid #0078d7;
             }
         """)
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
