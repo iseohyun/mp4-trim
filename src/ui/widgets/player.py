@@ -113,6 +113,8 @@ class EmbeddedVideoPlayer(QWidget):
         self.video_path_cached = ""
         self._last_hud_text = ""
         self._last_hud_visible = False
+        self._hud_false_counter = 0
+        self.force_hud_visible = False  # 수동 강제 표시 플래그
 
         # Caps Lock 감지 및 HUD 갱신 타이머 (100ms)
         self.hud_timer = QTimer(self)
@@ -246,8 +248,16 @@ class EmbeddedVideoPlayer(QWidget):
 
     def update_hud(self):
         from src.core.metadata import is_caps_lock_on
-        should_show = is_caps_lock_on() and self.has_video_loaded and bool(self.video_info)
+        raw_should = (is_caps_lock_on() or self.force_hud_visible) and self.has_video_loaded and bool(self.video_info)
         
+        if raw_should:
+            self._hud_false_counter = 0
+        else:
+            self._hud_false_counter += 1
+
+        # 5틱(500ms) 연속으로 OFF 상태일 때만 실제 hide 처리 (순간 깜빡임 방지 디바운스)
+        should_show = (self._hud_false_counter < 5) if self._last_hud_visible else raw_should
+
         if should_show:
             pos_ms = self.media_player.position()
             fps = self.video_info.get("fps", 0.0)
@@ -292,34 +302,17 @@ class EmbeddedVideoPlayer(QWidget):
                 self.info_overlay.setText(text)
                 self.info_overlay.adjustSize()
                 self.info_overlay.move(12, 12)
+                self.info_overlay.raise_()
                 self._last_hud_text = text
 
             if not self._last_hud_visible:
                 self.info_overlay.show()
                 self.info_overlay.raise_()
                 self._last_hud_visible = True
-                
-                # 진단용 스크린샷 및 로그 자동 기록
-                try:
-                    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-                    debug_dir = os.path.join(root_dir, "debug_screenshots")
-                    os.makedirs(debug_dir, exist_ok=True)
-                    snap_path = os.path.join(debug_dir, "hud_overlay_snap.png")
-                    def capture_snap():
-                        try:
-                            w = self.window()
-                            if w:
-                                px = w.grab()
-                                px.save(snap_path)
-                                logging.info(f"[HUD DIAGNOSTIC] Captured debug screenshot to {snap_path}")
-                        except Exception as err:
-                            logging.error(f"[HUD DIAGNOSTIC] Capture error: {err}")
-                    QTimer.singleShot(200, capture_snap)
-                    logging.info(f"[HUD DIAGNOSTIC] HUD Showed. geom={self.info_overlay.geometry()}, isVisible={self.info_overlay.isVisible()}")
-                except Exception as e:
-                    logging.error(f"[HUD DIAGNOSTIC] Screenshot trigger error: {e}")
+                logging.info(f"[HUD DIAGNOSTIC] HUD Showed. geom={self.info_overlay.geometry()}")
         else:
             if self._last_hud_visible:
                 self.info_overlay.hide()
                 self._last_hud_visible = False
                 self._last_hud_text = ""
+                logging.info(f"[HUD DIAGNOSTIC] HUD Hidden after debounce.")

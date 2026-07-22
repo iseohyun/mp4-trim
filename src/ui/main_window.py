@@ -194,9 +194,12 @@ class VideoCutterApp(QWidget):
         self.copyMetaCheck.setChecked(True)
         self.autoNumberCheck = QCheckBox("자동 넘버링")
         self.autoNumberCheck.setChecked(True)
+        self.hudCheck = QCheckBox("동영상 정보 HUD 표시")
+        self.hudCheck.toggled.connect(self.on_hud_check_toggled)
         opt_layout.addWidget(self.muteCheck)
         opt_layout.addWidget(self.copyMetaCheck)
         opt_layout.addWidget(self.autoNumberCheck)
+        opt_layout.addWidget(self.hudCheck)
 
         # 1-3. 저장 위치
         opt_layout.addWidget(QLabel("저장 위치"))
@@ -1014,6 +1017,10 @@ class VideoCutterApp(QWidget):
             self.refresh_task_history_combo()
         except Exception as e:
             print("Failed to save task history:", e)
+
+    def on_hud_check_toggled(self, checked):
+        self.player_widget.force_hud_visible = checked
+        self.player_widget.update_hud()
 
     def on_input_modified(self):
         if not self.is_loading_history:
