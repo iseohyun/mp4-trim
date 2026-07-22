@@ -1230,22 +1230,21 @@ class VideoCutterApp(QWidget):
                 if t.get('video_in') and os.path.abspath(os.path.normpath(t.get('video_in'))).lower() == norm_v
             )
             
+            # 글씨색은 언제나 기존의 흰색(#ffffff)으로 유지
+            item.setForeground(QColor("#ffffff"))
+            
             if cut_count >= 3:
-                # 3개 이상 컷팅 이력: 선명한 파스텔톤 노란색 배경 (#d4bd1b) + 짙은 어두운 글씨 (#111111)
-                item.setBackground(QColor("#d4bd1b"))
-                item.setForeground(QColor("#111111"))
+                # 3개 이상 컷팅 이력: 선명한 파스텔톤 노란색 배경 (#c4ab14)
+                item.setBackground(QColor("#c4ab14"))
             elif cut_count == 2:
-                # 2개 컷팅 이력: 중간 옅은 파스텔 노란색 배경 (#8c7c1e) + 흰색 글씨 (#ffffff)
-                item.setBackground(QColor("#8c7c1e"))
-                item.setForeground(QColor("#ffffff"))
+                # 2개 컷팅 이력: 중간 옅은 파스텔 노란색 배경 (#99861e)
+                item.setBackground(QColor("#99861e"))
             elif cut_count == 1:
-                # 1개 컷팅 이력: 아주 옅은 파스텔 노란색 배경 (#59521d) + 연한 크림 글씨 (#ffffcc)
-                item.setBackground(QColor("#59521d"))
-                item.setForeground(QColor("#ffffcc"))
+                # 1개 컷팅 이력: 아주 옅은 파스텔 노란색 배경 (#695c1b)
+                item.setBackground(QColor("#695c1b"))
             else:
-                # 0개 컷팅 이력: 기본 어두운 배경 (#1e1e1e) + 연한 회색 글씨 (#dcdcdc)
+                # 0개 컷팅 이력: 기본 어두운 배경 (#1e1e1e)
                 item.setBackground(QColor("#1e1e1e"))
-                item.setForeground(QColor("#dcdcdc"))
 
     def update_timeline_cut_highlights(self):
         cur_file = self.fileInput.text().strip()
