@@ -7,8 +7,6 @@ DEFAULT_HOTKEYS = {
     "play_pause": {"name": "재생 / 일시정지", "primary": "Space", "secondary": "K"},
     "step_1s_prev": {"name": "1초 뒤로 이동", "primary": "Left", "secondary": "J"},
     "step_1s_next": {"name": "1초 앞으로 이동", "primary": "Right", "secondary": "L"},
-    "step_5s_prev": {"name": "5초 뒤로 이동", "primary": "Shift+Left", "secondary": ""},
-    "step_5s_next": {"name": "5초 앞으로 이동", "primary": "Shift+Right", "secondary": ""},
     "step_frame_prev": {"name": "1프레임 뒤로 이동", "primary": "Ctrl+Left", "secondary": ""},
     "step_frame_next": {"name": "1프레임 앞으로 이동", "primary": "Ctrl+Right", "secondary": ""},
     "toggle_fullscreen": {"name": "전체화면 토글", "primary": "F", "secondary": "F11"},

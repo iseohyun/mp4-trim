@@ -335,10 +335,13 @@ class TrimmingSliderWidget(QWidget):
 
     def keyPressEvent(self, event):
         step_ms = 1000
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            step_ms = 5000
-        elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            step_ms = 100
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            # 1프레임 이동 (FPS 기반 계산)
+            fps = 30.0
+            parent_player = self.parent()
+            if hasattr(parent_player, 'video_info') and parent_player.video_info and parent_player.video_info.get("fps", 0) > 0:
+                fps = float(parent_player.video_info["fps"])
+            step_ms = max(1, int(round(1000.0 / fps)))
 
         if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             delta = step_ms if event.key() == Qt.Key.Key_Right else -step_ms

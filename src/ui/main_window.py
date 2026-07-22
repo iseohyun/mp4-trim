@@ -156,7 +156,7 @@ class VideoCutterApp(QWidget):
         opt_layout.setSpacing(8)
 
         opt_header = QHBoxLayout()
-        opt_title = QLabel("옵션 & 설정 (단축키: [)")
+        opt_title = QLabel("옵션 & 설정 (단축키: [ )")
         opt_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d89ef;")
         
         self.hotkey_btn = QPushButton("⌨")
@@ -292,7 +292,7 @@ class VideoCutterApp(QWidget):
         sidebar_layout.setContentsMargins(8, 8, 8, 8)
 
         sb_header = QHBoxLayout()
-        sb_title = QLabel("재생 목록 (단축키: ])")
+        sb_title = QLabel("재생 목록 (단축키: ] )")
         self.add_file_btn = QPushButton("+ 추가")
         self.add_file_btn.setStyleSheet("background-color: #2d89ef; color: white; padding: 4px 8px; font-weight: bold; border-radius: 4px;")
         self.add_file_btn.clicked.connect(self.openFileDialog)
@@ -341,6 +341,7 @@ class VideoCutterApp(QWidget):
 
     def build_hotkey_settings_page(self):
         opt_hotkey_page = QWidget()
+        opt_hotkey_page.setStyleSheet("QWidget { background-color: #252526; color: white; }")
         hk_layout = QVBoxLayout(opt_hotkey_page)
         hk_layout.setContentsMargins(6, 6, 6, 6)
         hk_layout.setSpacing(6)
@@ -372,9 +373,10 @@ class VideoCutterApp(QWidget):
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #252526; }")
 
         scroll_content = QWidget()
+        scroll_content.setStyleSheet("QWidget { background-color: #252526; color: white; }")
         self.hotkey_list_layout = QVBoxLayout(scroll_content)
         self.hotkey_list_layout.setContentsMargins(0, 0, 0, 0)
         self.hotkey_list_layout.setSpacing(4)
@@ -1093,10 +1095,6 @@ class VideoCutterApp(QWidget):
             self.player_widget.step_time(-1000)
         elif matched_action == "step_1s_next":
             self.player_widget.step_time(1000)
-        elif matched_action == "step_5s_prev":
-            self.player_widget.step_time(-5000)
-        elif matched_action == "step_5s_next":
-            self.player_widget.step_time(5000)
         elif matched_action == "step_frame_prev":
             self.player_widget.step_frame(forward=False)
         elif matched_action == "step_frame_next":
