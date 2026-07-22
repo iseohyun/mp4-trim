@@ -1230,16 +1230,24 @@ class VideoCutterApp(QWidget):
             self.nameInput.setText(final_name)
             self.nameInput.blockSignals(False)
 
+        start_cs = self.startInput.time_to_centiseconds(start_time)
+        end_cs = self.endInput.time_to_centiseconds(end_time)
+        dur_cs = max(0, end_cs - start_cs)
+        dur_str = self.startInput.centiseconds_to_time(dur_cs)
+
+        norm_in = os.path.normpath(video_in)
+        norm_out = os.path.normpath(video_out)
+
         ffmpeg_bin = get_ffmpeg_path()
 
         cmd = [
             ffmpeg_bin,
             "-ss",
             start_time,
-            "-to",
-            end_time,
+            "-t",
+            dur_str,
             "-i",
-            video_in,
+            norm_in,
         ]
 
         if self.muteCheck.isChecked():
@@ -1251,7 +1259,6 @@ class VideoCutterApp(QWidget):
             cmd.append("-map_metadata")
             cmd.append("0")
             if self.original_creation_dt:
-                start_cs = self.startInput.time_to_centiseconds(start_time)
                 offset_secs = start_cs / 100.0
                 new_creation_dt = self.original_creation_dt + timedelta(seconds=offset_secs)
                 new_creation_str = new_creation_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -1261,7 +1268,7 @@ class VideoCutterApp(QWidget):
             cmd.append("-map_metadata")
             cmd.append("-1")
 
-        cmd.extend(["-y", video_out])
+        cmd.extend(["-y", norm_out])
 
         try:
             subprocess.run(
