@@ -796,8 +796,59 @@ class VideoCutterApp(QWidget):
             return
             
         if not self.player_widget.is_transformed():
-            QMessageBox.information(self, "알림", "변경된 회전/반전 변형 옵션이 없습니다.")
+            self.capture_current_frame()
             return
+
+    def capture_current_frame(self):
+        if not self.player_widget.has_video_loaded or not self.fileInput.text().strip():
+            QMessageBox.warning(self, "경고", "스크린샷을 캡처할 영상이 선택되지 않았습니다.")
+            return
+
+        source_file = self.fileInput.text().strip()
+        if not os.path.isfile(source_file):
+            QMessageBox.warning(self, "경고", "원본 영상 파일이 존재하지 않습니다.")
+            return
+
+        pos_ms = self.player_widget.media_player.position()
+        time_str = ms_to_time_str(pos_ms)
+        time_tag = time_str.replace(":", "-").replace(".", "_")
+        
+        base_name = self.get_clean_output_name()
+        default_img_name = f"{base_name}_{time_tag}.png"
+        
+        default_dir = self.dirInput.text().strip() or os.path.dirname(source_file)
+        
+        save_name, ok = QInputDialog.getText(
+            self,
+            "현재 프레임 스크린샷 저장 (Ctrl+S)",
+            "저장할 스크린샷 이미지 파일 이름을 입력하세요:",
+            QLineEdit.EchoMode.Normal,
+            default_img_name
+        )
+        if not ok or not save_name.strip():
+            return
+
+        save_name = save_name.strip()
+        if not save_name.lower().endswith((".png", ".jpg", ".jpeg")):
+            save_name += ".png"
+
+        target_img_path = os.path.join(default_dir, save_name).replace('\\', '/')
+        
+        ffmpeg_bin = get_ffmpeg_path()
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-ss", time_str,
+            "-i", source_file,
+            "-vframes", "1",
+            "-q:v", "2",
+            target_img_path
+        ]
+
+        try:
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            self.show_toast(f"'{os.path.basename(target_img_path)}' 스크린샷 저장 완료!")
+        except Exception as e:
+            QMessageBox.critical(self, "에러", f"스크린샷 캡처 실패:\n{str(e)}")
 
         source_file = self.fileInput.text().strip()
         default_dir = self.dirInput.text().strip() or os.path.dirname(source_file)

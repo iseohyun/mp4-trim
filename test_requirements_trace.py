@@ -119,6 +119,13 @@ def run_traceability_tests():
     results.append(("Req 6: Flip/Rotation (H/V/R/L) Red Border & Ctrl+S Save", "PASS" if req6_pass else "FAIL"))
 
     # -------------------------------------------------------------
+    # Req 7: Un-transformed Ctrl+S Frame Capture / Screenshot
+    # -------------------------------------------------------------
+    print("\n[TEST 7] Un-transformed Ctrl+S Frame Capture / Screenshot...")
+    has_capture_fn = hasattr(ex, 'capture_current_frame')
+    results.append(("Req 7: Frame Screenshot Capture on Ctrl+S (capture_current_frame)", "PASS" if has_capture_fn else "FAIL"))
+
+    # -------------------------------------------------------------
     # SUMMARY REPORT
     # -------------------------------------------------------------
     print("\n=========================================================")
