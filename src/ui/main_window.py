@@ -358,6 +358,30 @@ class VideoCutterApp(QWidget):
         sidebar_layout.addLayout(sb_header)
 
         self.playlist_widget = CustomPlaylistListWidget()
+        self.playlist_widget.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                color: #dcdcdc;
+                border: 1px solid #333;
+                border-radius: 4px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding-top: 0.25em;
+                padding-bottom: 0.25em;
+                padding-left: 0.5em;
+                padding-right: 0.5em;
+                margin: 0px;
+                border-bottom: 1px solid #282828;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d7;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: #333333;
+            }
+        """)
         self.playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.playlist_widget.customContextMenuRequested.connect(self.on_playlist_context_menu)
         self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_item_double_clicked)
@@ -1097,18 +1121,40 @@ class VideoCutterApp(QWidget):
         
         self.is_loading_history = True
         
-        self.fileInput.setText(task['video_in'])
-        self.startInput.setText(task['start_time'])
-        self.endInput.setText(task['end_time'])
+        # 1. 영상 파일 로드 및 재생바 연동
+        v_in = task.get('video_in', '')
+        if v_in and os.path.isfile(v_in):
+            self.fileInput.setText(v_in)
+            if self.player_widget.video_path_cached != v_in:
+                self.player_widget.load_video(v_in, auto_play=False)
+
+        # 2. 작업 히스토리의 시작/종료 범위로 start & end 설정
+        start_str = task.get('start_time', '00:00:00.00')
+        end_str = task.get('end_time', '00:00:00.00')
+        self.startInput.setText(start_str)
+        self.endInput.setText(end_str)
         
+        # 3. 타임라인 슬라이더의 [Start, End] 마커 및 재생 헤드 위치 동기화
+        start_cs = self.startInput.time_to_centiseconds(start_str)
+        end_cs = self.endInput.time_to_centiseconds(end_str)
+        start_ms = start_cs * 10
+        end_ms = end_cs * 10
+        
+        if hasattr(self.player_widget, 'trimming_slider'):
+            self.player_widget.trimming_slider.set_start_ms(start_ms)
+            self.player_widget.trimming_slider.set_end_ms(end_ms)
+            self.player_widget.trimming_slider.set_position(start_ms)
+        if hasattr(self.player_widget, 'media_player'):
+            self.player_widget.media_player.setPosition(start_ms)
+
         raw_out_name = task.get('out_name', '')
         if raw_out_name.lower().endswith(".mp4"):
             raw_out_name = raw_out_name[:-4]
         self.nameInput.setText(raw_out_name)
 
-        self.muteCheck.setChecked(task['mute'])
-        self.copyMetaCheck.setChecked(task['copy_meta'])
-        self.autoNumberCheck.setChecked(task['auto_number'])
+        self.muteCheck.setChecked(task.get('mute', False))
+        self.copyMetaCheck.setChecked(task.get('copy_meta', True))
+        self.autoNumberCheck.setChecked(task.get('auto_number', False))
         
         radio_state = task.get('radio_state', 'custom')
         if radio_state == 'same':
@@ -1118,10 +1164,11 @@ class VideoCutterApp(QWidget):
         else:
             self.radioCustom.setChecked(True)
             
-        self.dirInput.setText(task['out_dir'])
+        self.dirInput.setText(task.get('out_dir', ''))
         
         self.create_history_flag = False
         self.is_loading_history = False
+        self.update_timeline_cut_highlights()
 
     def add_task_history(self):
         video_in = self.fileInput.text().strip()
@@ -1176,13 +1223,13 @@ class VideoCutterApp(QWidget):
             v_path = item.data(Qt.ItemDataRole.UserRole)
             cut_count = sum(1 for t in self.task_histories if t.get('video_in') == v_path)
             if cut_count >= 3:
-                # 3개 이상: 선명한 파스텔 노랑
-                item.setBackground(QColor("#544c10"))
-                item.setForeground(QColor("#ffff00"))
+                # 3개 이상: 선명한 파스텔 노랑 배경 + 흰색 글씨
+                item.setBackground(QColor("#615610"))
+                item.setForeground(QColor("#ffffff"))
             elif cut_count >= 1:
-                # 1~2개: 연한 파스텔 노랑
-                item.setBackground(QColor("#3d391c"))
-                item.setForeground(QColor("#fff59d"))
+                # 1~2개: 연한 파스텔 노랑 배경 + 흰색 글씨
+                item.setBackground(QColor("#3d3714"))
+                item.setForeground(QColor("#ffffff"))
             else:
                 item.setBackground(QColor("#1e1e1e"))
                 item.setForeground(QColor("#dcdcdc"))
