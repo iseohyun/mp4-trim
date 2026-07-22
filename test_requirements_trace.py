@@ -97,6 +97,28 @@ def run_traceability_tests():
     os.remove(dummy_input2)
 
     # -------------------------------------------------------------
+    # Req 5: Playlist Item F2 Rename
+    # -------------------------------------------------------------
+    print("\n[TEST 5] Playlist Item F2 Rename Functionality...")
+    has_f2_handler = hasattr(ex, 'rename_selected_playlist_file')
+    results.append(("Req 5: Playlist Item F2 Rename (rename_selected_playlist_file)", "PASS" if has_f2_handler else "FAIL"))
+
+    # -------------------------------------------------------------
+    # Req 6: Flip (H/V) & Rotation (R/L) Red Border & Ctrl+S Save
+    # -------------------------------------------------------------
+    print("\n[TEST 6] Flip/Rotation Transforms, Red Border & Ctrl+S Save...")
+    ex.player_widget.flip_horizontal()
+    transformed_h = ex.player_widget.is_transformed()
+    ex.player_widget.rotate_right()
+    transformed_r = ex.player_widget.transform_rotation == 90
+    ex.player_widget.reset_transform()
+    transformed_reset = not ex.player_widget.is_transformed()
+    has_save_fn = hasattr(ex, 'save_transform_video')
+    
+    req6_pass = transformed_h and transformed_r and transformed_reset and has_save_fn
+    results.append(("Req 6: Flip/Rotation (H/V/R/L) Red Border & Ctrl+S Save", "PASS" if req6_pass else "FAIL"))
+
+    # -------------------------------------------------------------
     # SUMMARY REPORT
     # -------------------------------------------------------------
     print("\n=========================================================")

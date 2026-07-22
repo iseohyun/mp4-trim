@@ -92,6 +92,10 @@ class EmbeddedVideoPlayer(QWidget):
 
         self.drag_start_pos = None
 
+        self.transform_rotation = 0  # 0, 90, 180, 270 degrees
+        self.transform_flip_h = False
+        self.transform_flip_v = False
+
         # 동영상 정보 반투명 노란색 오버레이 HUD (Native DWM Top-Level Window로 Direct3D 덮임 완벽 방지)
         self.info_overlay = QLabel(self)
         self.info_overlay.setWindowFlags(
@@ -229,7 +233,53 @@ class EmbeddedVideoPlayer(QWidget):
             self.thumb_thread = ThumbnailGeneratorThread(file_path, count=10, parent=self)
             self.thumb_thread.thumbnails_ready.connect(self.trimming_slider.set_thumbnail_files)
             self.thumb_thread.start()
+            self.reset_transform()
             self.setFocus()
+
+    def is_transformed(self) -> bool:
+        return self.transform_rotation != 0 or self.transform_flip_h or self.transform_flip_v
+
+    def update_transform_border(self):
+        if self.is_transformed():
+            self.video_widget.setStyleSheet("QVideoWidget { border: 3px solid #ff3b30; border-radius: 4px; }")
+        else:
+            self.video_widget.setStyleSheet("")
+
+    def reset_transform(self):
+        self.transform_rotation = 0
+        self.transform_flip_h = False
+        self.transform_flip_v = False
+        self.update_transform_border()
+
+    def flip_horizontal(self):
+        self.transform_flip_h = not self.transform_flip_h
+        self.update_transform_border()
+        status = "수평 뒤집기 적용" if self.transform_flip_h else "수평 뒤집기 해제"
+        main_win = self.window()
+        if hasattr(main_win, 'show_toast'):
+            main_win.show_toast(f"{status} (저장: Ctrl+S)")
+
+    def flip_vertical(self):
+        self.transform_flip_v = not self.transform_flip_v
+        self.update_transform_border()
+        status = "수직 뒤집기 적용" if self.transform_flip_v else "수직 뒤집기 해제"
+        main_win = self.window()
+        if hasattr(main_win, 'show_toast'):
+            main_win.show_toast(f"{status} (저장: Ctrl+S)")
+
+    def rotate_right(self):
+        self.transform_rotation = (self.transform_rotation + 90) % 360
+        self.update_transform_border()
+        main_win = self.window()
+        if hasattr(main_win, 'show_toast'):
+            main_win.show_toast(f"오른쪽 90° 회전 (총 {self.transform_rotation}° | 저장: Ctrl+S)")
+
+    def rotate_left(self):
+        self.transform_rotation = (self.transform_rotation - 90) % 360
+        self.update_transform_border()
+        main_win = self.window()
+        if hasattr(main_win, 'show_toast'):
+            main_win.show_toast(f"왼쪽 90° 회전 (총 {self.transform_rotation}° | 저장: Ctrl+S)")
 
     def toggle_play(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:

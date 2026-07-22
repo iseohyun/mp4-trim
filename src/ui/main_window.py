@@ -114,7 +114,12 @@ class PlaylistDelegate(QStyledItemDelegate):
 
 class CustomPlaylistListWidget(QListWidget):
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Delete:
+        if event.key() == Qt.Key.Key_F2:
+            main_win = self.window()
+            if hasattr(main_win, 'rename_selected_playlist_file'):
+                main_win.rename_selected_playlist_file()
+                return
+        elif event.key() == Qt.Key.Key_Delete:
             main_win = self.window()
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 if hasattr(main_win, 'delete_selected_playlist_file_permanently'):
@@ -717,6 +722,152 @@ class VideoCutterApp(QWidget):
                 QMessageBox.critical(self, "삭제 실패", f"파일을 삭제하지 못했습니다:\n{e}")
         else:
             self.show_toast(f"'{file_name}' 목록에서 제거되었습니다.")
+
+    def rename_selected_playlist_file(self):
+        item = self.playlist_widget.currentItem()
+        if not item:
+            return
+        old_file_path = item.data(Qt.ItemDataRole.UserRole)
+        if not old_file_path or not os.path.isfile(old_file_path):
+            return
+            
+        old_dir = os.path.dirname(old_file_path)
+        old_file_name = os.path.basename(old_file_path)
+        old_base, ext = os.path.splitext(old_file_name)
+        if not ext:
+            ext = ".mp4"
+            
+        new_base, ok = QInputDialog.getText(
+            self,
+            "파일 이름 변경 (F2)",
+            "새 파일 이름을 입력하세요:",
+            QLineEdit.EchoMode.Normal,
+            old_base
+        )
+        if not ok or not new_base.strip():
+            return
+            
+        new_base = new_base.strip()
+        if new_base == old_base:
+            return
+            
+        new_file_name = new_base + ext
+        new_file_path = os.path.join(old_dir, new_file_name).replace('\\', '/')
+        
+        if os.path.exists(new_file_path):
+            QMessageBox.warning(self, "경고", f"동일한 이름의 파일이 이미 존재합니다.\n{new_file_name}")
+            return
+            
+        try:
+            is_active = (self.player_widget.video_path_cached == old_file_path or self.fileInput.text() == old_file_path)
+            if is_active:
+                self.player_widget.unload_video()
+                
+            os.rename(old_file_path, new_file_path)
+            
+            item.setText(new_file_name)
+            item.setToolTip(new_file_path)
+            item.setData(Qt.ItemDataRole.UserRole, new_file_path)
+            
+            norm_old = os.path.abspath(os.path.normpath(old_file_path)).lower()
+            for idx, p in enumerate(self.playlist_files):
+                if os.path.abspath(os.path.normpath(p)).lower() == norm_old:
+                    self.playlist_files[idx] = new_file_path
+            self.save_playlist_history()
+            
+            for t in self.task_histories:
+                if t.get('video_in') and os.path.abspath(os.path.normpath(t['video_in'])).lower() == norm_old:
+                    t['video_in'] = new_file_path
+            save_app_data_json("task_history.json", self.task_histories)
+            
+            self.refresh_playlist_colors()
+            
+            if is_active:
+                self.fileInput.setText(new_file_path)
+                self.player_widget.load_video(new_file_path, auto_play=True)
+                
+            self.show_toast(f"'{old_base}' -> '{new_base}' (으)로 변경되었습니다.")
+        except Exception as e:
+            QMessageBox.critical(self, "에러", f"파일 이름 변경 실패:\n{str(e)}")
+
+    def save_transform_video(self):
+        if not self.player_widget.has_video_loaded or not self.fileInput.text().strip():
+            QMessageBox.warning(self, "경고", "저장할 원본 영상이 선택되지 않았습니다.")
+            return
+            
+        if not self.player_widget.is_transformed():
+            QMessageBox.information(self, "알림", "변경된 회전/반전 변형 옵션이 없습니다.")
+            return
+
+        source_file = self.fileInput.text().strip()
+        default_dir = self.dirInput.text().strip() or os.path.dirname(source_file)
+        default_name = self.get_clean_output_name()
+        
+        save_name, ok = QInputDialog.getText(
+            self,
+            "변형 상태 저장 (Ctrl+S)",
+            "저장할 파일 이름을 입력하세요 (동일 이름 시 덮어쓰기):",
+            QLineEdit.EchoMode.Normal,
+            default_name
+        )
+        if not ok or not save_name.strip():
+            return
+            
+        save_name = save_name.strip()
+        if save_name.lower().endswith(".mp4"):
+            save_name = save_name[:-4]
+            
+        target_path = os.path.join(default_dir, save_name + ".mp4").replace('\\', '/')
+        
+        filters = []
+        rot = self.player_widget.transform_rotation
+        if rot == 90:
+            filters.append("transpose=1")
+        elif rot == 180:
+            filters.append("transpose=1,transpose=1")
+        elif rot == 270:
+            filters.append("transpose=2")
+            
+        if self.player_widget.transform_flip_h:
+            filters.append("hflip")
+        if self.player_widget.transform_flip_v:
+            filters.append("vflip")
+            
+        if not filters:
+            return
+            
+        vf_str = ",".join(filters)
+        ffmpeg_bin = get_ffmpeg_path()
+        
+        is_overwrite = os.path.exists(target_path)
+        temp_target = target_path + ".tmp.mp4" if is_overwrite else target_path
+        
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-i", source_file,
+            "-vf", vf_str,
+            "-c:a", "copy",
+            temp_target
+        ]
+        
+        try:
+            if is_overwrite and (self.player_widget.video_path_cached == target_path or source_file == target_path):
+                self.player_widget.unload_video()
+                
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            
+            if is_overwrite:
+                if os.path.exists(target_path):
+                    os.remove(target_path)
+                os.rename(temp_target, target_path)
+                
+            self.player_widget.reset_transform()
+            self.add_file_to_playlist(target_path, load_immediately=True, save_history=True)
+            self.show_toast(f"'{os.path.basename(target_path)}' (으)로 변형 저장되었습니다.")
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "에러", f"변형 저장 실패:\n{e.stderr}")
+        except Exception as e:
+            QMessageBox.critical(self, "에러", f"변형 저장 실패:\n{str(e)}")
 
     def clear_playlist(self):
         if self.player_widget.has_video_loaded:
@@ -1373,5 +1524,17 @@ class VideoCutterApp(QWidget):
             self.view_source_properties()
         elif matched_action == "delete_playlist_item":
             self.remove_selected_playlist_item()
+        elif matched_action == "rename_playlist_item":
+            self.rename_selected_playlist_file()
+        elif matched_action == "flip_h":
+            self.player_widget.flip_horizontal()
+        elif matched_action == "flip_v":
+            self.player_widget.flip_vertical()
+        elif matched_action == "rotate_right":
+            self.player_widget.rotate_right()
+        elif matched_action == "rotate_left":
+            self.player_widget.rotate_left()
+        elif matched_action == "save_transform":
+            self.save_transform_video()
         else:
             super().keyPressEvent(event)

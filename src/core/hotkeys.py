@@ -13,6 +13,12 @@ DEFAULT_HOTKEYS = {
     "exit_fullscreen": {"name": "전체화면 해제", "primary": "Esc", "secondary": ""},
     "show_properties": {"name": "동영상 정보 보기", "primary": "?", "secondary": ""},
     "delete_playlist_item": {"name": "재생목록 항목 삭제", "primary": "Delete", "secondary": ""},
+    "rename_playlist_item": {"name": "재생목록 파일 이름 변경", "primary": "F2", "secondary": ""},
+    "flip_h": {"name": "수평 뒤집기", "primary": "H", "secondary": ""},
+    "flip_v": {"name": "수직 뒤집기", "primary": "V", "secondary": ""},
+    "rotate_right": {"name": "오른쪽 90도 회전", "primary": "R", "secondary": ""},
+    "rotate_left": {"name": "왼쪽 90도 회전", "primary": "L", "secondary": ""},
+    "save_transform": {"name": "변형 상태 저장", "primary": "Ctrl+S", "secondary": ""},
 }
 
 def event_to_key_str(event: QKeyEvent) -> str:
@@ -48,6 +54,8 @@ def event_to_key_str(event: QKeyEvent) -> str:
         k = "Delete"
     elif key == Qt.Key.Key_Escape:
         k = "Esc"
+    elif key == Qt.Key.Key_F2:
+        k = "F2"
     else:
         k = QKeySequence(key).toString().upper()
 
