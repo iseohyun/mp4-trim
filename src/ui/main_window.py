@@ -1574,10 +1574,12 @@ class VideoCutterApp(QWidget):
         elif matched_action == "step_frame_next":
             self.player_widget.step_frame(forward=True)
         elif matched_action == "toggle_fullscreen":
-            self.player_widget.toggle_fullscreen()
+            self.cycle_fullscreen_mode()
         elif matched_action == "exit_fullscreen":
-            if self.isFullScreen():
-                self.showNormal()
+            self.fullscreen_stage = 0
+            self.setWindowFlags(Qt.WindowType.Window)
+            self.showNormal()
+            self.player_widget.update_transform_border()
         elif matched_action == "show_properties":
             self.view_source_properties()
         elif matched_action == "delete_playlist_item":
@@ -1594,5 +1596,33 @@ class VideoCutterApp(QWidget):
             self.player_widget.rotate_left()
         elif matched_action == "save_transform":
             self.save_transform_video()
+        elif matched_action == "toggle_time_label":
+            self.player_widget.toggle_time_label()
         else:
             super().keyPressEvent(event)
+
+    def cycle_fullscreen_mode(self):
+        if not hasattr(self, 'fullscreen_stage'):
+            self.fullscreen_stage = 0
+        self.fullscreen_stage = (self.fullscreen_stage + 1) % 4
+        
+        if self.fullscreen_stage == 0:
+            self.setWindowFlags(Qt.WindowType.Window)
+            self.showNormal()
+            self.show_toast("전체화면 해제 (기본 창 모드)")
+        elif self.fullscreen_stage == 1:
+            self.setWindowFlags(Qt.WindowType.Window)
+            self.showFullScreen()
+            self.show_toast("전체화면 모드 [1/3] (표준 전체화면)")
+        elif self.fullscreen_stage == 2:
+            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+            self.showFullScreen()
+            self.show_toast("전체화면 모드 [2/3] (프레임 무시 최대 크기 - 비율 유지 검정 배경)")
+        elif self.fullscreen_stage == 3:
+            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+            self.showFullScreen()
+            self.show_toast("전체화면 모드 [3/3] (프레임 무시 최대 확장 - 꽉 찬 화면)")
+
+        self.raise_()
+        self.activateWindow()
+        self.player_widget.update_transform_border()

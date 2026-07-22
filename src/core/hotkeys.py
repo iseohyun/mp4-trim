@@ -19,6 +19,7 @@ DEFAULT_HOTKEYS = {
     "rotate_right": {"name": "오른쪽 90도 회전", "primary": "R", "secondary": ""},
     "rotate_left": {"name": "왼쪽 90도 회전", "primary": "L", "secondary": ""},
     "save_transform": {"name": "변형 상태 저장", "primary": "Ctrl+S", "secondary": ""},
+    "toggle_time_label": {"name": "시간 정보 표시 토글", "primary": "T", "secondary": ""},
 }
 
 def event_to_key_str(event: QKeyEvent) -> str:

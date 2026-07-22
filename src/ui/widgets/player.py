@@ -57,51 +57,24 @@ class EmbeddedVideoPlayer(QWidget):
         self.transform_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.transform_badge.hide()
 
-        # 2. 하단 100% 필름스트립 타임라인 슬라이더
+        # 2. 썸네일바 바로 위 시간 정보 바 (왼쪽 정렬)
+        time_bar_layout = QHBoxLayout()
+        time_bar_layout.setContentsMargins(6, 4, 6, 2)
+        time_bar_layout.setSpacing(0)
+
+        self.time_label = QLabel("00:00:00.00 / 00:00:00.00")
+        self.time_label.setStyleSheet("color: #e0e0e0; font-weight: bold; font-family: Consolas, monospace; font-size: 12px; background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 4px;")
+        time_bar_layout.addWidget(self.time_label)
+        time_bar_layout.addStretch()
+
+        main_layout.addLayout(time_bar_layout)
+
+        # 3. 하단 100% 필름스트립 타임라인 슬라이더
         self.trimming_slider = TrimmingSliderWidget(self)
         self.trimming_slider.position_changed.connect(self.media_player.setPosition)
         main_layout.addWidget(self.trimming_slider, 0)
 
-        # 3. 비디오 화면 위 마우스 호버 오버레이 패널
-        self.overlay = QFrame(self.video_widget)
-        self.overlay.setStyleSheet("QFrame { background-color: rgba(15, 20, 28, 0.75); border-radius: 8px; }")
-
-        ov_layout = QVBoxLayout(self.overlay)
-        ov_layout.setContentsMargins(10, 8, 10, 8)
-
-        # 중앙 큰 재생/일시정지 버튼
-        btn_box = QHBoxLayout()
-        self.center_play_btn = QPushButton("▶")
-        self.center_play_btn.setFixedSize(48, 48)
-        self.center_play_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 22px; color: white; background-color: rgba(0, 0, 0, 0.6);
-                border: 2px solid rgba(255, 255, 255, 0.7); border-radius: 24px;
-            }
-            QPushButton:hover { background-color: rgba(0, 120, 215, 0.85); border-color: #0078d7; }
-        """)
-        self.center_play_btn.clicked.connect(self.toggle_play)
-        btn_box.addStretch()
-        btn_box.addWidget(self.center_play_btn)
-        btn_box.addStretch()
-        ov_layout.addLayout(btn_box)
-
-        # 하단 컨트롤 바 (시간표시, 전체화면)
-        bottom_box = QHBoxLayout()
-        bottom_box.setSpacing(8)
-
-        self.time_label = QLabel("00:00:00.00 / 00:00:00.00")
-        self.time_label.setStyleSheet("color: white; font-weight: bold; font-family: Consolas, monospace; font-size: 13px; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;")
-
-        self.fullscreen_btn = QPushButton("⛶")
-        self.fullscreen_btn.setStyleSheet("QPushButton { color: white; background-color: #444; padding: 4px 8px; border-radius: 4px; font-size: 14px; } QPushButton:hover { background-color: #666; }")
-        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-
-        bottom_box.addWidget(self.time_label)
-        bottom_box.addStretch()
-        bottom_box.addWidget(self.fullscreen_btn)
-
-        ov_layout.addLayout(bottom_box)
+        self.show_time_label = True
 
         # 시그널 연결
         self.media_player.positionChanged.connect(self.on_position_changed)
@@ -291,21 +264,53 @@ class EmbeddedVideoPlayer(QWidget):
         # -------------------------------------------------------------
         if hasattr(self, 'video_item') and self.video_item and hasattr(self, 'graphics_view') and self.graphics_view:
             v_size = self.graphics_view.size()
-            w, h = float(v_size.width()), float(v_size.height())
-            if w > 0 and h > 0:
-                self.graphics_scene.setSceneRect(0, 0, w, h)
-                self.video_item.setSize(QSizeF(w, h))
-                self.video_item.setTransformOriginPoint(w / 2.0, h / 2.0)
+            cw, ch = float(v_size.width()), float(v_size.height())
+            if cw > 0 and ch > 0:
+                self.graphics_scene.setSceneRect(0, 0, cw, ch)
+                
+                # Check video native aspect ratio or item size
+                item_size = self.video_item.nativeSize()
+                vw = float(item_size.width()) if item_size.width() > 0 else cw
+                vh = float(item_size.height()) if item_size.height() > 0 else ch
 
-            # Apply live rotation to video item on screen
-            self.video_item.setRotation(float(self.transform_rotation))
+                if self.transform_rotation in (90, 270):
+                    # Rotated 90/270: Aspect ratio fits (vh, vw) into container bounds (cw, ch)
+                    scale = min(cw / vh, ch / vw)
+                    fit_w = vw * scale
+                    fit_h = vh * scale
+                else:
+                    scale = min(cw / vw, ch / vh)
+                    fit_w = vw * scale
+                    fit_h = vh * scale
 
-            # Apply live scale flip (hflip, vflip) to video item on screen
-            sx = -1.0 if self.transform_flip_h else 1.0
-            sy = -1.0 if self.transform_flip_v else 1.0
-            t = QTransform()
-            t.scale(sx, sy)
-            self.video_item.setTransform(t)
+                self.video_item.setSize(QSizeF(fit_w, fit_h))
+                
+                # Center video item inside graphics scene
+                pos_x = (cw - fit_w) / 2.0
+                pos_y = (ch - fit_h) / 2.0
+                self.video_item.setPos(pos_x, pos_y)
+
+                # Unified transform matrix: translate to item center, rotate, scale flip, translate back
+                center_x = fit_w / 2.0
+                center_y = fit_h / 2.0
+
+                t = QTransform()
+                t.translate(center_x, center_y)
+                t.rotate(float(self.transform_rotation))
+                sx = -1.0 if self.transform_flip_h else 1.0
+                sy = -1.0 if self.transform_flip_v else 1.0
+                t.scale(sx, sy)
+                t.translate(-center_x, -center_y)
+
+                self.video_item.setTransform(t)
+
+    def toggle_time_label(self):
+        self.show_time_label = not self.show_time_label
+        if hasattr(self, 'time_label') and self.time_label:
+            self.time_label.setVisible(self.show_time_label)
+        main_win = self.window()
+        if hasattr(main_win, 'show_toast'):
+            main_win.show_toast("시간 정보 표시 ON" if self.show_time_label else "시간 정보 표시 OFF")
 
     def reset_transform(self):
         self.transform_rotation = 0

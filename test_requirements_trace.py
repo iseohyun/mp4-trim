@@ -3,8 +3,11 @@ import os
 from PyQt6.QtWidgets import QApplication
 import src.core.metadata
 src.core.metadata.get_detailed_video_info = lambda p: {'duration': 60.0, 'fps': 30.0, 'width': 1920, 'height': 1080}
+src.core.metadata.get_media_creation_time_and_duration = lambda p: (6000, None)
 import src.ui.widgets.player
 src.ui.widgets.player.ThumbnailGeneratorThread.run = lambda self: None
+import src.ui.main_window
+src.ui.main_window.get_media_creation_time_and_duration = lambda p: (6000, None)
 
 from src.ui.main_window import VideoCutterApp
 from src.ui.widgets.timeline import TrimmingSliderWidget
@@ -134,7 +137,14 @@ def run_traceability_tests():
     print(f" -> Output nameInput text: '{out_name_val}' (expected 'test_auto_name')")
     results.append(("Req 8: Loaded Video Auto Output Filename Default", "PASS" if req8_pass else "FAIL"))
     os.remove(dummy_load)
-
+    # -------------------------------------------------------------
+    # Req 9: 4-Stage Fullscreen Cycle & Time Label T Toggle
+    # -------------------------------------------------------------
+    print("\n[TEST 9] 4-Stage Fullscreen Cycle & Time Label T Toggle...")
+    has_cycle_fn = hasattr(ex, 'cycle_fullscreen_mode')
+    has_toggle_time_fn = hasattr(ex.player_widget, 'toggle_time_label')
+    req9_pass = has_cycle_fn and has_toggle_time_fn
+    results.append(("Req 9: 4-Stage Fullscreen Cycle & Time Label T Toggle", "PASS" if req9_pass else "FAIL"))
     # -------------------------------------------------------------
     # SUMMARY REPORT
     # -------------------------------------------------------------
