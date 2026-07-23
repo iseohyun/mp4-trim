@@ -57,19 +57,14 @@ class EmbeddedVideoPlayer(QWidget):
         self.transform_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.transform_badge.hide()
 
-        # 2. 썸네일바 바로 위 시간 정보 바 (왼쪽 정렬)
-        time_bar_layout = QHBoxLayout()
-        time_bar_layout.setContentsMargins(6, 4, 6, 2)
-        time_bar_layout.setSpacing(0)
+        # 비디오 화면 하단 좌측 오버레이 시간 정보 배지 (회색 행 제거)
+        self.time_label = QLabel("00:00:00.00 / 00:00:00.00", self.video_widget)
+        self.time_label.setStyleSheet("QLabel { color: #ffffff; font-weight: bold; font-family: Consolas, monospace; font-size: 12px; background: rgba(0, 0, 0, 0.75); padding: 4px 10px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.2); }")
+        self.time_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.time_label.adjustSize()
+        self.time_label.show()
 
-        self.time_label = QLabel("00:00:00.00 / 00:00:00.00")
-        self.time_label.setStyleSheet("color: #e0e0e0; font-weight: bold; font-family: Consolas, monospace; font-size: 12px; background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 4px;")
-        time_bar_layout.addWidget(self.time_label)
-        time_bar_layout.addStretch()
-
-        main_layout.addLayout(time_bar_layout)
-
-        # 3. 하단 100% 필름스트립 타임라인 슬라이더
+        # 하단 100% 필름스트립 타임라인 슬라이더
         self.trimming_slider = TrimmingSliderWidget(self)
         self.trimming_slider.position_changed.connect(self.media_player.setPosition)
         main_layout.addWidget(self.trimming_slider, 0)
@@ -138,9 +133,11 @@ class EmbeddedVideoPlayer(QWidget):
         super().resizeEvent(event)
         vw_w = self.video_widget.width()
         vw_h = self.video_widget.height()
-        ov_h = 100
-        self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
-        self.overlay.raise_()
+        if hasattr(self, 'overlay') and self.overlay:
+            ov_h = 100
+            self.overlay.setGeometry(10, vw_h - ov_h - 10, max(10, vw_w - 20), ov_h)
+            self.overlay.raise_()
+        self.update_time_label_position()
         if self._last_hud_visible and self.video_widget.isVisible():
             gpos = self.video_widget.mapToGlobal(QPoint(12, 12))
             self.info_overlay.move(gpos)
@@ -170,11 +167,12 @@ class EmbeddedVideoPlayer(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def show_overlay(self):
-        self.overlay.show()
-        self.hide_timer.start()
+        if hasattr(self, 'overlay') and self.overlay:
+            self.overlay.show()
+            self.hide_timer.start()
 
     def hide_overlay(self):
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        if hasattr(self, 'overlay') and self.overlay and self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.overlay.hide()
 
     def step_time(self, delta_ms: int):
@@ -357,11 +355,13 @@ class EmbeddedVideoPlayer(QWidget):
         self.setFocus()
 
     def on_playback_state_changed(self, state):
-        if state == QMediaPlayer.PlaybackState.PlayingState:
-            self.center_play_btn.setText("⏸")
-        else:
-            self.center_play_btn.setText("▶")
-            self.overlay.show()
+        if hasattr(self, 'center_play_btn') and self.center_play_btn:
+            if state == QMediaPlayer.PlaybackState.PlayingState:
+                self.center_play_btn.setText("⏸")
+            else:
+                self.center_play_btn.setText("▶")
+                if hasattr(self, 'overlay') and self.overlay:
+                    self.overlay.show()
         self.setFocus()
 
     def set_position(self, position):
@@ -370,12 +370,25 @@ class EmbeddedVideoPlayer(QWidget):
     def on_position_changed(self, position_ms):
         self.trimming_slider.set_position(position_ms)
         dur_ms = self.media_player.duration()
-        self.time_label.setText(f"{ms_to_time_str(position_ms)} / {ms_to_time_str(dur_ms)}")
+        if hasattr(self, 'time_label') and self.time_label:
+            self.time_label.setText(f"{ms_to_time_str(position_ms)} / {ms_to_time_str(dur_ms)}")
+            self.update_time_label_position()
 
     def on_duration_changed(self, duration_ms):
         self.trimming_slider.set_duration(duration_ms)
         pos_ms = self.media_player.position()
-        self.time_label.setText(f"{ms_to_time_str(pos_ms)} / {ms_to_time_str(duration_ms)}")
+        if hasattr(self, 'time_label') and self.time_label:
+            self.time_label.setText(f"{ms_to_time_str(pos_ms)} / {ms_to_time_str(duration_ms)}")
+            self.update_time_label_position()
+
+    def update_time_label_position(self):
+        if hasattr(self, 'time_label') and self.time_label and hasattr(self, 'video_widget') and self.video_widget:
+            self.time_label.adjustSize()
+            vw_h = self.video_widget.height()
+            tl_h = self.time_label.height()
+            if vw_h > 0:
+                self.time_label.move(14, max(14, vw_h - tl_h - 14))
+                self.time_label.raise_()
 
     def toggle_fullscreen(self):
         w = self.window()
