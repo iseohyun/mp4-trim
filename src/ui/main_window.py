@@ -132,6 +132,21 @@ class CustomPlaylistListWidget(QListWidget):
         super().keyPressEvent(event)
 
 
+def set_win32_window_rounding(win_id: int, enable_rounding: bool = False):
+    try:
+        import ctypes
+        from ctypes import c_int, byref
+        preference = c_int(2 if enable_rounding else 1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            c_int(win_id),
+            c_int(33),
+            byref(preference),
+            ctypes.sizeof(preference)
+        )
+    except Exception:
+        pass
+
+
 class VideoCutterApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -1620,6 +1635,7 @@ class VideoCutterApp(QWidget):
             # Stage 0: Normal window mode (전체화면 안함)
             self.setWindowFlags(Qt.WindowType.Window)
             self.showNormal()
+            set_win32_window_rounding(int(self.winId()), enable_rounding=True)
             if hasattr(self, 'option_sidebar'):
                 self.option_sidebar.setVisible(getattr(self, 'option_sidebar_visible', True))
             if hasattr(self, 'playlist_sidebar'):
@@ -1628,6 +1644,7 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.show()
             if root_layout:
                 root_layout.setContentsMargins(10, 10, 10, 10)
+                root_layout.setSpacing(10)
             self.player_widget.set_fullscreen_mode(is_video_only=False, stretch_fill=False)
             self.show_toast("전체화면 해제 (기본 창 모드)")
 
@@ -1635,6 +1652,7 @@ class VideoCutterApp(QWidget):
             # Stage 1: Standard Fullscreen with UI controls (표준 전체화면)
             self.setWindowFlags(Qt.WindowType.Window)
             self.showFullScreen()
+            set_win32_window_rounding(int(self.winId()), enable_rounding=True)
             if hasattr(self, 'option_sidebar'):
                 self.option_sidebar.setVisible(getattr(self, 'option_sidebar_visible', True))
             if hasattr(self, 'playlist_sidebar'):
@@ -1643,38 +1661,40 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.show()
             if root_layout:
                 root_layout.setContentsMargins(10, 10, 10, 10)
+                root_layout.setSpacing(10)
             self.player_widget.set_fullscreen_mode(is_video_only=False, stretch_fill=False)
             self.show_toast("전체화면 모드 [1/3] (표준 전체화면 - UI 컨트롤 포함)")
 
-        elif self.fullscreen_stage == 2:
-            # Stage 2: Frameless Video-Only Fullscreen (프레임/메뉴 없음, 비율 유지 검정 배경)
-            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-            self.showFullScreen()
+        elif self.fullscreen_stage in (2, 3):
+            # Stage 2 & 3: Frameless 100% Physical Screen Video-Only Fullscreen (Taskbar covered, zero rounding, zero gap)
+            stretch = (self.fullscreen_stage == 3)
+            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+            
+            # Remove Windows 11 DWM rounded corners
+            set_win32_window_rounding(int(self.winId()), enable_rounding=False)
+            
+            # Hide sidebars and timeline
             if hasattr(self, 'option_sidebar'):
                 self.option_sidebar.hide()
             if hasattr(self, 'playlist_sidebar'):
                 self.playlist_sidebar.hide()
             if hasattr(self.player_widget, 'trimming_slider'):
                 self.player_widget.trimming_slider.hide()
+            
             if root_layout:
                 root_layout.setContentsMargins(0, 0, 0, 0)
-            self.player_widget.set_fullscreen_mode(is_video_only=True, stretch_fill=False)
-            self.show_toast("전체화면 모드 [2/3] (프레임/메뉴 무시 - 비율 유지 동영상 전용 전체화면)")
-
-        elif self.fullscreen_stage == 3:
-            # Stage 3: Frameless Video-Only Fullscreen (프레임/메뉴 없음, 100% 모니터 꽉 찬 확장)
-            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+                root_layout.setSpacing(0)
+                
+            self.player_widget.set_fullscreen_mode(is_video_only=True, stretch_fill=stretch)
+            
+            # Expand to physical monitor screen geometry (covering Windows taskbar completely)
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen:
+                self.setGeometry(screen.geometry())
             self.showFullScreen()
-            if hasattr(self, 'option_sidebar'):
-                self.option_sidebar.hide()
-            if hasattr(self, 'playlist_sidebar'):
-                self.playlist_sidebar.hide()
-            if hasattr(self.player_widget, 'trimming_slider'):
-                self.player_widget.trimming_slider.hide()
-            if root_layout:
-                root_layout.setContentsMargins(0, 0, 0, 0)
-            self.player_widget.set_fullscreen_mode(is_video_only=True, stretch_fill=True)
-            self.show_toast("전체화면 모드 [3/3] (프레임/메뉴 무시 - 100% 꽉 찬 동영상 전용 전체화면)")
+            
+            msg = "전체화면 모드 [3/3] (프레임/메뉴/작업표시줄 무시 - 100% 꽉 찬 동영상 모드)" if stretch else "전체화면 모드 [2/3] (프레임/메뉴/작업표시줄 무시 - 비율 유지 동영상 모드)"
+            self.show_toast(msg)
 
         self.raise_()
         self.activateWindow()
