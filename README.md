@@ -1,8 +1,8 @@
-![MP4-Trim image](MP4-Trim%20image.png)
+# 🎬 Movie Player Lite
 
 ## 📌 프로젝트 개요 및 목적
-- 대용량 고화질 동영상 편집 시 Timeline 재인코딩 과정에서 발생하는 시간적·품질적 손실을 방지합니다.
-- **FFmpeg 기반 무손실(Stream Copy) 초고속 Cuttings 기능**으로 원하는 유효 구간만 손실 없이 순식간에 추출합니다.
+- **Movie Player Lite**는 대용량 고화질 동영상 편집 시 Timeline 재인코딩 과정에서 발생하는 시간적·품질적 손실을 방지하는 초고속 무손실 영상 플레이어 & 분할기입니다.
+- **FFmpeg 기반 무손실(Stream Copy) 초고속 Cutting 기능**으로 원하는 유효 구간만 손실 없이 순식간에 추출합니다.
 
 ---
 

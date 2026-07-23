@@ -1,4 +1,4 @@
-# MP4-Trim Version History
+# Movie Player Lite Version History
 
 ## [v1.5.0] - 2026-07-23 (Full Visual Transform & DWM Screen Integration)
 ### Added / Enhanced

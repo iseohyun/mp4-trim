@@ -208,7 +208,7 @@ class VideoCutterApp(QWidget):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
-        self.setWindowTitle("초고속 무손실 영상 분할기 v1.0.5")
+        self.setWindowTitle("Movie Player Lite v1.5.0")
         self.setAcceptDrops(True)
 
         screen = QApplication.primaryScreen()
