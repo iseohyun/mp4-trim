@@ -31,9 +31,9 @@ class EmbeddedVideoPlayer(QWidget):
         self.video_container = QFrame(self)
         self.video_container.setObjectName("video_container")
         self.video_container.setStyleSheet("QFrame#video_container { background-color: #000000; border-radius: 0px; }")
-        container_layout = QVBoxLayout(self.video_container)
-        container_layout.setContentsMargins(4, 4, 4, 4)
-        container_layout.setSpacing(0)
+        self.container_layout = QVBoxLayout(self.video_container)
+        self.container_layout.setContentsMargins(4, 4, 4, 4)
+        self.container_layout.setSpacing(0)
 
         self.graphics_scene = QGraphicsScene(self)
         self.graphics_view = QGraphicsView(self.graphics_scene, self.video_container)
@@ -47,7 +47,7 @@ class EmbeddedVideoPlayer(QWidget):
         self.media_player.setVideoOutput(self.video_item)
 
         self.video_widget = self.graphics_view
-        container_layout.addWidget(self.graphics_view, 1)
+        self.container_layout.addWidget(self.graphics_view, 1)
 
         main_layout.addWidget(self.video_container, 1)
 
@@ -163,7 +163,11 @@ class EmbeddedVideoPlayer(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        self.toggle_fullscreen()
+        w = self.window()
+        if hasattr(w, 'cycle_fullscreen_mode'):
+            w.cycle_fullscreen_mode()
+        else:
+            self.toggle_fullscreen()
         super().mouseDoubleClickEvent(event)
 
     def show_overlay(self):
@@ -271,15 +275,17 @@ class EmbeddedVideoPlayer(QWidget):
                 vw = float(item_size.width()) if item_size.width() > 0 else cw
                 vh = float(item_size.height()) if item_size.height() > 0 else ch
 
-                if self.transform_rotation in (90, 270):
-                    # Rotated 90/270: Aspect ratio fits (vh, vw) into container bounds (cw, ch)
-                    scale = min(cw / vh, ch / vw)
-                    fit_w = vw * scale
-                    fit_h = vh * scale
+                if getattr(self, 'is_stretch_fill', False):
+                    fit_w, fit_h = cw, ch
                 else:
-                    scale = min(cw / vw, ch / vh)
-                    fit_w = vw * scale
-                    fit_h = vh * scale
+                    if self.transform_rotation in (90, 270):
+                        scale = min(cw / vh, ch / vw)
+                        fit_w = vw * scale
+                        fit_h = vh * scale
+                    else:
+                        scale = min(cw / vw, ch / vh)
+                        fit_w = vw * scale
+                        fit_h = vh * scale
 
                 self.video_item.setSize(QSizeF(fit_w, fit_h))
                 
@@ -301,6 +307,16 @@ class EmbeddedVideoPlayer(QWidget):
                 t.translate(-center_x, -center_y)
 
                 self.video_item.setTransform(t)
+
+    def set_fullscreen_mode(self, is_video_only: bool, stretch_fill: bool = False):
+        self.is_video_only_fullscreen = is_video_only
+        self.is_stretch_fill = stretch_fill
+        if hasattr(self, 'container_layout') and self.container_layout:
+            if is_video_only:
+                self.container_layout.setContentsMargins(0, 0, 0, 0)
+            else:
+                self.container_layout.setContentsMargins(4, 4, 4, 4)
+        self.update_transform_border()
 
     def toggle_time_label(self):
         self.show_time_label = not self.show_time_label

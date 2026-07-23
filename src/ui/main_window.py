@@ -1587,7 +1587,27 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.show()
             if self.layout():
                 self.layout().setContentsMargins(10, 10, 10, 10)
-            self.player_widget.update_transform_border()
+            self.player_widget.set_fullscreen_mode(is_video_only=False, stretch_fill=False)
+        elif matched_action == "show_properties":
+            self.view_source_properties()
+        elif matched_action == "delete_playlist_item":
+            self.remove_selected_playlist_item()
+        elif matched_action == "rename_playlist_item":
+            self.rename_selected_playlist_file()
+        elif matched_action == "flip_h":
+            self.player_widget.flip_horizontal()
+        elif matched_action == "flip_v":
+            self.player_widget.flip_vertical()
+        elif matched_action == "rotate_right":
+            self.player_widget.rotate_right()
+        elif matched_action == "rotate_left":
+            self.player_widget.rotate_left()
+        elif matched_action == "save_transform":
+            self.save_transform_video()
+        elif matched_action == "toggle_time_label":
+            self.player_widget.toggle_time_label()
+        else:
+            super().keyPressEvent(event)
 
     def cycle_fullscreen_mode(self):
         if not hasattr(self, 'fullscreen_stage'):
@@ -1608,6 +1628,7 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.show()
             if root_layout:
                 root_layout.setContentsMargins(10, 10, 10, 10)
+            self.player_widget.set_fullscreen_mode(is_video_only=False, stretch_fill=False)
             self.show_toast("전체화면 해제 (기본 창 모드)")
 
         elif self.fullscreen_stage == 1:
@@ -1622,6 +1643,7 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.show()
             if root_layout:
                 root_layout.setContentsMargins(10, 10, 10, 10)
+            self.player_widget.set_fullscreen_mode(is_video_only=False, stretch_fill=False)
             self.show_toast("전체화면 모드 [1/3] (표준 전체화면 - UI 컨트롤 포함)")
 
         elif self.fullscreen_stage == 2:
@@ -1636,6 +1658,7 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.hide()
             if root_layout:
                 root_layout.setContentsMargins(0, 0, 0, 0)
+            self.player_widget.set_fullscreen_mode(is_video_only=True, stretch_fill=False)
             self.show_toast("전체화면 모드 [2/3] (프레임/메뉴 무시 - 비율 유지 동영상 전용 전체화면)")
 
         elif self.fullscreen_stage == 3:
@@ -1650,8 +1673,8 @@ class VideoCutterApp(QWidget):
                 self.player_widget.trimming_slider.hide()
             if root_layout:
                 root_layout.setContentsMargins(0, 0, 0, 0)
+            self.player_widget.set_fullscreen_mode(is_video_only=True, stretch_fill=True)
             self.show_toast("전체화면 모드 [3/3] (프레임/메뉴 무시 - 100% 꽉 찬 동영상 전용 전체화면)")
 
         self.raise_()
         self.activateWindow()
-        self.player_widget.update_transform_border()
